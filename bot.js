@@ -9,13 +9,16 @@ const schedule = require('node-schedule');
 require('dotenv').config(); // Load environment variables from .env file
 
 // Replace with your bot token
+// Replace with your bot token
 const token = process.env.TELEGRAM_BOT_TOKEN;
-const url = process.env.HEROKU_APP_URL; // Set this to your Heroku app URL
-const port = process.env.PORT || 3000;
+const url = process.env.RENDER_APP_URL; // Use Render app URL
+const port = process.env.PORT || 3001;
 
 const bot = new TelegramBot(token, { webHook: true });
 bot.setWebHook(`${url}/bot${token}`);
 
+const express = require('express');
+const bodyParser = require('body-parser');
 const app = express();
 app.use(bodyParser.json());
 
