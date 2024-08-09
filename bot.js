@@ -1,3 +1,5 @@
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const csv = require('csv-parser');
@@ -7,9 +9,25 @@ const schedule = require('node-schedule');
 require('dotenv').config(); // Load environment variables from .env file
 
 // Replace with your bot token
-const token = process.env.TELEGRAM_BOT_TOKEN || 'YOUR_BOT_TOKEN';
-const bot = new TelegramBot(token, { polling: true });
-const groupId = process.env.TELEGRAM_GROUP_ID || 'YOUR_GROUP_ID';
+const token = process.env.TELEGRAM_BOT_TOKEN;
+const url = process.env.HEROKU_APP_URL; // Set this to your Heroku app URL
+const port = process.env.PORT || 3000;
+
+const bot = new TelegramBot(token, { webHook: true });
+bot.setWebHook(`${url}/bot${token}`);
+
+const app = express();
+app.use(bodyParser.json());
+
+app.post(`/bot${token}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
+app.listen(port, () => {
+  console.log(`Express server is listening on ${port}`);
+});
+
 // Paystack secret key
 const paystackSecretKey =
   process.env.PAYSTACK_SECRET_KEY || 'YOUR_PAYSTACK_SECRET_KEY';
@@ -30,11 +48,13 @@ bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
 
   // Send the terms and conditions picture
-  bot.sendPhoto(chatId, 'TC.jpg', {
-    caption: 'Please read the terms and conditions before proceeding.',
-  }).then(() => {
-    bot.sendMessage(chatId, 'Please provide your email address:');
-  });
+  bot
+    .sendPhoto(chatId, 'TC.jpg', {
+      caption: 'Please read the terms and conditions before proceeding.',
+    })
+    .then(() => {
+      bot.sendMessage(chatId, 'Please provide your email address:');
+    });
 
   bot.once('message', (msg) => {
     if (msg.text && !msg.text.startsWith('/')) {
@@ -153,7 +173,7 @@ bot.on('callback_query', async (callbackQuery) => {
   if (data === 'made_payment') {
     await bot.sendMessage(
       message.chat.id,
-      'Please enter your payment reference:'
+      'Please enter your payment reference on the receipt sent to your email:'
     );
 
     bot.once('message', async (msg) => {
