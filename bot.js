@@ -1,15 +1,16 @@
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const csv = require('csv-parser');
 const { parse } = require('json2csv');
 const axios = require('axios');
 const schedule = require('node-schedule');
-require('dotenv').config(); // Load environment variables from .env file
+// Load environment variables from .env file
+require('dotenv').config();
 
-// Replace with your bot token
-// Replace with your bot token
+const express = require('express');
+const bodyParser = require('body-parser');
+
+// Replace with your bot token and Render app URL
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const url = process.env.RENDER_APP_URL; // Use Render app URL
 const port = process.env.PORT || 3001;
@@ -17,8 +18,6 @@ const port = process.env.PORT || 3001;
 const bot = new TelegramBot(token, { webHook: true });
 bot.setWebHook(`${url}/bot${token}`);
 
-const express = require('express');
-const bodyParser = require('body-parser');
 const app = express();
 app.use(bodyParser.json());
 
@@ -52,7 +51,7 @@ bot.onText(/\/start/, (msg) => {
 
   // Send the terms and conditions picture
   bot
-    .sendPhoto(chatId, 'TC.jpg', {
+    .sendPhoto(chatId, 'TC.png', {
       caption: 'Please read the terms and conditions before proceeding.',
     })
     .then(() => {
