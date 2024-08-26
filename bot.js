@@ -3,15 +3,15 @@ const fs = require('fs');
 const csv = require('csv-parser');
 const { parse } = require('json2csv');
 const axios = require('axios');
+const lockfile = require('proper-lockfile');
 const schedule = require('node-schedule');
 require('dotenv').config();
 
 const express = require('express');
 const bodyParser = require('body-parser');
 
-// Replace with your bot token and Render app URL
 const token = process.env.TELEGRAM_BOT_TOKEN;
-const url = process.env.RENDER_APP_URL; // Use Render app URL
+const url = process.env.RENDER_APP_URL;
 const port = process.env.PORT || 3001;
 
 const bot = new TelegramBot(token, { webHook: true });
@@ -25,18 +25,19 @@ app.post(`/bot${token}`, (req, res) => {
   res.sendStatus(200);
 });
 
+// Endpoint for webhook to trigger CSV sync
+app.post('/sync-csv', (req, res) => {
+  syncCSVWithRender();
+  res.status(200).send('CSV sync triggered.');
+});
+
 app.listen(port, () => {
   console.log(`Express server is listening on ${port}`);
 });
 
-// Paystack secret key
-const paystackSecretKey =
-  process.env.PAYSTACK_SECRET_KEY || 'YOUR_PAYSTACK_SECRET_KEY';
-
-// CSV file path
+const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
 const csvFilePath = 'users.csv';
 
-// Ensure the CSV file exists
 if (!fs.existsSync(csvFilePath)) {
   fs.writeFileSync(
     csvFilePath,
@@ -44,7 +45,22 @@ if (!fs.existsSync(csvFilePath)) {
   );
 }
 
-// Helper function to read all users from CSV
+// Function to periodically sync the CSV file with Render
+function syncCSVWithRender() {
+  axios
+    .get(`${process.env.RENDER_APP_URL}/path/to/your/csv`)
+    .then((response) => {
+      fs.writeFileSync(csvFilePath, response.data);
+      console.log('CSV file synchronized with Render.');
+    })
+    .catch((error) => {
+      console.error('Error synchronizing CSV with Render:', error.message);
+    });
+}
+
+// Schedule the CSV sync to happen every hour (adjust the interval as needed)
+setInterval(syncCSVWithRender, 5 * 60 * 1000); // 5 minutes in milliseconds
+
 function readUsersFromCSV() {
   return new Promise((resolve, reject) => {
     const users = [];
@@ -56,17 +72,28 @@ function readUsersFromCSV() {
   });
 }
 
-// Helper function to write users back to CSV
 function writeUsersToCSV(users) {
   const csvString = parse(users, { header: true });
   fs.writeFileSync(csvFilePath, csvString);
 }
 
-// Listen for '/start' command
+// Helper function to write users back to CSV with file locking
+function writeUsersToCSV(users) {
+  lockfile
+    .lock(csvFilePath, { retries: 3 }) // Attempt to lock the file before writing
+    .then((release) => {
+      const csvString = parse(users, { header: true });
+      fs.writeFileSync(csvFilePath, csvString);
+      release(); // Release the lock after writing is done
+    })
+    .catch((error) => {
+      console.error('Error locking CSV file:', error);
+    });
+}
+
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
 
-  // Send the terms and conditions picture
   bot
     .sendPhoto(chatId, 'TC.png', {
       caption: 'Please read the terms and conditions before proceeding.',
@@ -123,7 +150,6 @@ bot.onText(/\/start/, (msg) => {
   });
 });
 
-// Listen for '/subscribe' command
 bot.onText(/\/subscribe/, (msg) => {
   const chatId = msg.chat.id;
   bot.sendMessage(
@@ -140,7 +166,6 @@ bot.onText(/\/subscribe/, (msg) => {
   );
 });
 
-// Function to verify payment using Paystack API
 async function verifyPayment(reference) {
   try {
     const response = await axios.get(
@@ -157,7 +182,6 @@ async function verifyPayment(reference) {
   }
 }
 
-// Handle button clicks
 bot.on('callback_query', async (callbackQuery) => {
   const message = callbackQuery.message;
   const data = callbackQuery.data;
@@ -185,22 +209,35 @@ bot.on('callback_query', async (callbackQuery) => {
             });
 
             writeUsersToCSV(updatedUsers);
-            bot.sendMessage(
-              msg.chat.id,
-              'Payment verified successfully. You now have access to the VIP. Click the button below to join now.',
-              {
-                reply_markup: {
-                  inline_keyboard: [
-                    [
-                      {
-                        text: 'Join VIP Group',
-                        url: 'https://t.me/+z0-HqT_ofAcwZTBk',
-                      },
-                    ],
-                  ],
-                },
-              }
-            );
+
+            // Check if the group URL is still valid
+            const groupUrl = 'https://t.me/+z0-HqT_ofAcwZTBk';
+            axios
+              .get(groupUrl)
+              .then(() => {
+                bot.sendMessage(
+                  msg.chat.id,
+                  'Payment verified successfully. You now have access to the VIP. Click the button below to join now.',
+                  {
+                    reply_markup: {
+                      inline_keyboard: [
+                        [
+                          {
+                            text: 'Join VIP Group',
+                            url: groupUrl,
+                          },
+                        ],
+                      ],
+                    },
+                  }
+                );
+              })
+              .catch(() => {
+                bot.sendMessage(
+                  msg.chat.id,
+                  'There seems to be an issue with the group link. Please contact support.'
+                );
+              });
           });
         } else {
           bot.sendMessage(
@@ -214,7 +251,6 @@ bot.on('callback_query', async (callbackQuery) => {
     await bot.answerCallbackQuery(callbackQuery.id);
     await bot.sendMessage(message.chat.id, `You selected: ${data}`);
 
-    // Get user email and process payment
     readUsersFromCSV()
       .then((users) => {
         const user = users.find((u) => u.id === String(message.chat.id));
@@ -283,7 +319,6 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 });
 
-// Function to check subscription status and send daily predictions
 async function checkSubscriptionAndSendPredictions() {
   const today = new Date();
   const users = await readUsersFromCSV();
@@ -291,12 +326,12 @@ async function checkSubscriptionAndSendPredictions() {
   users.forEach((user) => {
     const subscriptionStart = new Date(user.subscription_start);
     const subscriptionEnd = new Date(subscriptionStart);
-    subscriptionEnd.setDate(subscriptionEnd.getDate() + 30); // Assuming a 30-day subscription
+    subscriptionEnd.setDate(subscriptionEnd.getDate() + 30);
 
     if (subscriptionEnd > today && user.status === 'true') {
       bot.sendMessage(user.id, "Here is today's VIP prediction...");
     } else if (subscriptionEnd <= today && user.status === 'true') {
-      user.status = 'false'; // Update the status to inactive
+      user.status = 'false';
       writeUsersToCSV(users);
       bot.sendMessage(
         user.id,
@@ -306,7 +341,6 @@ async function checkSubscriptionAndSendPredictions() {
   });
 }
 
-// Schedule daily predictions
-schedule.scheduleJob('0 9 * * *', checkSubscriptionAndSendPredictions); // Run at 9 AM daily
+schedule.scheduleJob('0 9 * * *', checkSubscriptionAndSendPredictions);
 
 console.log('Bot is running...');
