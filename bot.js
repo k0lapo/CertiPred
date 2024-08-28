@@ -48,7 +48,7 @@ if (!fs.existsSync(csvFilePath)) {
 // Function to periodically sync the CSV file with Render
 function syncCSVWithRender() {
   axios
-    .get(`${process.env.RENDER_APP_URL}/path/to/your/csv`)
+    .get(`${process.env.RENDER_APP_URL}/users.csv`)
     .then((response) => {
       fs.writeFileSync(csvFilePath, response.data);
       console.log('CSV file synchronized with Render.');
