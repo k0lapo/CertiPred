@@ -8,6 +8,7 @@ const schedule = require('node-schedule');
 require('dotenv').config();
 
 const express = require('express');
+const path = require('path');
 const bodyParser = require('body-parser');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -19,6 +20,20 @@ bot.setWebHook(`${url}/bot${token}`);
 
 const app = express();
 app.use(bodyParser.json());
+
+// Serve the CSV file at /users.csv endpoint
+app.get('/users.csv', (req, res) => {
+  res.sendFile(csvFilePath, (err) => {
+    if (err) {
+      console.error('Error sending file:', err);
+      res.status(404).send('File not found');
+    }
+  });
+});
+
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
 
 app.post(`/bot${token}`, (req, res) => {
   bot.processUpdate(req.body);
