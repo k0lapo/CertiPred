@@ -38,7 +38,7 @@ if (!fs.existsSync(csvFilePath)) {
 
 // Serve the CSV file at /users.csv endpoint
 app.get('/users.csv', (req, res) => {
-  const filePath = path.join(__dirname, csvFilePath);  // Ensure the path is absolute
+  const filePath = path.join(__dirname, csvFilePath); // Ensure the path is absolute
   res.sendFile(filePath, (err) => {
     if (err) {
       console.error('Error sending file:', err);
@@ -46,7 +46,6 @@ app.get('/users.csv', (req, res) => {
     }
   });
 });
-
 
 const port = process.env.PORT || 0;
 app.listen(port, () => {
@@ -131,7 +130,6 @@ bot.onText(/\/start/, (msg) => {
 
       readUsersFromCSV()
         .then((users) => {
-          
           const userExists = users.some((u) => u.id === String(user.id));
 
           if (!userExists) {
@@ -333,28 +331,45 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 });
 
-async function checkSubscriptionAndSendPredictions() {
+async function checkSubscriptionAndManageUsers() {
   const today = new Date();
   const users = await readUsersFromCSV();
+  const expiredUsers = [];
 
   users.forEach((user) => {
     const subscriptionStart = new Date(user.subscription_start);
     const subscriptionEnd = new Date(subscriptionStart);
     subscriptionEnd.setDate(subscriptionEnd.getDate() + 30);
 
-    if (subscriptionEnd > today && user.status === 'true') {
-      bot.sendMessage(user.id, "Here is today's VIP prediction...");
-    } else if (subscriptionEnd <= today && user.status === 'true') {
+    if (subscriptionEnd <= today && user.status.toLowerCase() === 'true') {
       user.status = 'false';
-      writeUsersToCSV(users);
+      expiredUsers.push(user); // Add the user to the expired list
       bot.sendMessage(
         user.id,
         'Your subscription has expired. Click /subscribe to renew.'
       );
     }
   });
+
+  // Remove expired users after sending the reminder
+  const updatedUsers = users.filter((user) => !expiredUsers.includes(user));
+  await writeUsersToCSV(updatedUsers); // Save the updated list of users
+
+  // Schedule reminders to renew subscriptions for users who were kicked out
+  expiredUsers.forEach((user) => {
+    const reminderDate = new Date();
+    reminderDate.setDate(reminderDate.getDate() + 7); // Set reminder 7 days after expiration
+
+    schedule.scheduleJob(reminderDate, () => {
+      bot.sendMessage(
+        user.id,
+        'This is a friendly reminder to renew your subscription. Click /subscribe to continue receiving VIP predictions.'
+      );
+    });
+  });
 }
 
-schedule.scheduleJob('0 9 * * *', checkSubscriptionAndSendPredictions);
+// Schedule the job to run every day at 9 AM
+schedule.scheduleJob('0 9 * * *', checkSubscriptionAndManageUsers);
 
 console.log('Bot is running...');
