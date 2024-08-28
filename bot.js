@@ -13,7 +13,6 @@ const bodyParser = require('body-parser');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const url = process.env.RENDER_APP_URL;
-const port = process.env.PORT || 3001;
 
 const bot = new TelegramBot(token, { webHook: true });
 bot.setWebHook(`${url}/bot${token}`);
@@ -21,33 +20,10 @@ bot.setWebHook(`${url}/bot${token}`);
 const app = express();
 app.use(bodyParser.json());
 
-// Serve the CSV file at /users.csv endpoint
-app.get('/users.csv', (req, res) => {
-  res.sendFile(csvFilePath, (err) => {
-    if (err) {
-      console.error('Error sending file:', err);
-      res.status(404).send('File not found');
-    }
-  });
-});
-
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
-
-app.post(`/bot${token}`, (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
-});
-
 // Endpoint for webhook to trigger CSV sync
 app.post('/sync-csv', (req, res) => {
   syncCSVWithRender();
   res.status(200).send('CSV sync triggered.');
-});
-
-app.listen(port, () => {
-  console.log(`Express server is listening on ${port}`);
 });
 
 const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
@@ -59,6 +35,26 @@ if (!fs.existsSync(csvFilePath)) {
     'id,username,first_name,last_name,email,status,payment_reference,subscription_start\n'
   );
 }
+
+// Serve the CSV file at /users.csv endpoint
+app.get('/users.csv', (req, res) => {
+  res.sendFile(csvFilePath, (err) => {
+    if (err) {
+      console.error('Error sending file:', err);
+      res.status(404).send('File not found');
+    }
+  });
+});
+
+const port = process.env.PORT || 0;
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
+
+app.post(`/bot${token}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
 
 // Function to periodically sync the CSV file with Render
 function syncCSVWithRender() {
@@ -133,6 +129,7 @@ bot.onText(/\/start/, (msg) => {
 
       readUsersFromCSV()
         .then((users) => {
+          
           const userExists = users.some((u) => u.id === String(user.id));
 
           if (!userExists) {
