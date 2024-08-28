@@ -38,13 +38,15 @@ if (!fs.existsSync(csvFilePath)) {
 
 // Serve the CSV file at /users.csv endpoint
 app.get('/users.csv', (req, res) => {
-  res.sendFile(csvFilePath, (err) => {
+  const filePath = path.join(__dirname, csvFilePath);  // Ensure the path is absolute
+  res.sendFile(filePath, (err) => {
     if (err) {
       console.error('Error sending file:', err);
       res.status(404).send('File not found');
     }
   });
 });
+
 
 const port = process.env.PORT || 0;
 app.listen(port, () => {
