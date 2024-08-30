@@ -223,7 +223,7 @@ bot.on('callback_query', async (callbackQuery) => {
             writeUsersToCSV(updatedUsers);
 
             // Check if the group URL is still valid
-            const groupUrl = 'https://t.me/+z0-HqT_ofAcwZTBk';
+            const groupUrl = 'https://t.me/+JzA27nYlzw03M2Q0';
             axios
               .get(groupUrl)
               .then(() => {
