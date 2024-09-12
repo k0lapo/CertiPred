@@ -47,7 +47,7 @@ app.get('/users.csv', (req, res) => {
   });
 });
 
-const port = process.env.PORT || 0;
+const port = process.env.PORT || 3001;
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
@@ -350,6 +350,32 @@ async function checkSubscriptionAndManageUsers() {
       );
     }
   });
+
+  async function kickUsersWithFalseStatus() {
+    const users = await readUsersFromCSV(); // Read users from CSV
+
+    users.forEach((user) => {
+      if (user.status.toLowerCase() === 'false') {
+        const userId = user.id; // Get the user's Telegram ID
+
+        // Kick user out of the group
+        bot
+          .kickChatMember('@VIPGroupUsername', userId)
+          .then(() => {
+            console.log(`Kicked user ${userId} from the VIP group.`);
+            bot.sendMessage(
+              userId,
+              'You have been removed from the VIP group due to expired or invalid subscription. Click /subscribe to renew.'
+            );
+          })
+          .catch((error) => {
+            console.error(`Failed to kick user ${userId}:`, error.message);
+          });
+      }
+    });
+  }
+  // Schedule the job to run every day at 9 AM
+  schedule.scheduleJob('0 9 * * *', kickUsersWithFalseStatus);
 
   // Remove expired users after sending the reminder
   const updatedUsers = users.filter((user) => !expiredUsers.includes(user));
