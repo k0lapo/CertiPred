@@ -16,7 +16,7 @@ const url = process.env.RENDER_APP_URL;
 const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
 const csvFilePath = 'users.csv';
 
-const VIP_GROUP_URL = 'https://t.me/+m3RfixPU4cBiNTM8';
+const VIP_GROUP_URL = 'https://t.me/+bmG1AjEf0AYxN2M0';
 const GHANA_PRICE = 488 * 100; // In pesewas
 const NIGERIA_PRICE = 50000 * 100; // In kobo
 const CURRENCY_MAP = {
