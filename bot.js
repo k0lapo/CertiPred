@@ -20,7 +20,7 @@ const csvFilePath = 'users.csv';
 
 const VIP_GROUP_URL = 'https://t.me/+bmG1AjEf0AYxN2M0';
 const GHANA_PRICE = 488 * 100; // In pesewas
-const NIGERIA_PRICE = 50000 * 100; // In kobo
+const NIGERIA_PRICE = 5 * 100; // In kobo
 const CURRENCY_MAP = {
   nigeria: 'NGN',
   ghana: 'GHS',
@@ -189,7 +189,6 @@ app.post('/paystack/webhook', (req, res) => {
 
   res.sendStatus(200);
 });
-
 
 // Schedule the expiration check job to run daily at midnight
 schedule.scheduleJob('0 0 * * *', manageSubscriptionExpirations);
