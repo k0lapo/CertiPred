@@ -20,7 +20,7 @@ const csvFilePath = 'users.csv';
 
 const VIP_GROUP_URL = 'https://t.me/+bmG1AjEf0AYxN2M0';
 const GHANA_PRICE = 488 * 100; // In pesewas
-const NIGERIA_PRICE = 5 * 100; // In kobo
+const NIGERIA_PRICE = 50000 * 100; // In kobo
 const CURRENCY_MAP = {
   nigeria: 'NGN',
   ghana: 'GHS',
@@ -139,6 +139,95 @@ function manageSubscriptionExpirations() {
       console.error('Error reading users from CSV:', error.message);
     });
 }
+
+//crypto payment
+bot.onText(/\/crypto/, (msg) => {
+  const chatId = msg.chat.id;
+  const paymentAmount = 5; // $5 in USDT
+  const yourTRC20Wallet = 'TAx123...'; // <- Your wallet address here
+
+  bot.sendMessage(
+    chatId,
+    `🔐 *Crypto Payment - USDT (TRC-20)*\n\n` +
+      `Please send *${paymentAmount} USDT* to the address below:\n\n` +
+      `\`${yourTRC20Wallet}\`\n\n` +
+      `After sending, reply here with the *TXID (Transaction Hash)* to verify.`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+//accept and verify txid
+
+bot.onText(/^[a-fA-F0-9]{64}$/, async (msg) => {
+  const chatId = msg.chat.id;
+  const txid = msg.text;
+  const tronGridApiKey = process.env.TRONGRID_API_KEY;
+
+  try {
+    const res = await axios.get(
+      `https://api.trongrid.io/v1/transactions/${txid}`,
+      {
+        headers: { 'TRON-PRO-API-KEY': tronGridApiKey },
+      }
+    );
+
+    const tx = res.data.data[0];
+
+    if (
+      tx &&
+      tx.raw_data.contract[0].type === 'TriggerSmartContract' &&
+      tx.ret[0].contractRet === 'SUCCESS'
+    ) {
+      const amount =
+        parseInt(tx.raw_data.contract[0].parameter.value.data, 16) / 1e6;
+
+      const to = tx.raw_data.contract[0].parameter.value.contract_address;
+
+      const expectedReceiver = '417b62c8d47c6a5353e03a01d81d5c4e3d3fa0cf15';
+
+      const minUSDT = 5;
+
+      if (
+        to.toLowerCase() === expectedReceiver.toLowerCase() &&
+        amount >= minUSDT
+      ) {
+        // Mark user as paid
+        const users = await readUsersFromCSV();
+        const userIndex = users.findIndex((u) => u.id === String(chatId));
+
+        if (userIndex !== -1) {
+          const user = users[userIndex];
+          user.status = 'true';
+          user.subscription_start = new Date().toISOString();
+          user.payment_reference = `USDT-${txid}`;
+          writeUsersToCSV(users);
+
+          bot.sendMessage(
+            chatId,
+            `✅ Payment confirmed on-chain! Welcome to VIP.`
+          );
+          bot.sendMessage(chatId, `Click below to join the VIP group:`, {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: 'Join VIP Group', url: VIP_GROUP_URL }],
+              ],
+            },
+          });
+        }
+      } else {
+        bot.sendMessage(chatId, `⚠️ Payment amount or address mismatch.`);
+      }
+    } else {
+      bot.sendMessage(chatId, `❌ Transaction not successful or invalid type.`);
+    }
+  } catch (err) {
+    console.error(err.message);
+    bot.sendMessage(
+      chatId,
+      `⚠️ Failed to verify transaction. Try again later.`
+    );
+  }
+});
 
 //add paystack webhook route
 
