@@ -1,6 +1,8 @@
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const csv = require('csv-parser');
+const crypto = require('crypto');
+
 const { parse } = require('json2csv');
 const axios = require('axios');
 const lockfile = require('proper-lockfile');
@@ -137,6 +139,57 @@ function manageSubscriptionExpirations() {
       console.error('Error reading users from CSV:', error.message);
     });
 }
+
+//add paystack webhook route
+
+app.post('/paystack/webhook', (req, res) => {
+  const hash = crypto
+    .createHmac('sha512', paystackSecretKey)
+    .update(JSON.stringify(req.body))
+    .digest('hex');
+
+  if (hash === req.headers['x-paystack-signature']) {
+    const event = req.body.event;
+
+    if (event === 'charge.success') {
+      const data = req.body.data;
+      const email = data.customer.email;
+      const reference = data.reference;
+
+      readUsersFromCSV()
+        .then((users) => {
+          const userIndex = users.findIndex(
+            (u) => u.email === email && u.payment_reference === reference
+          );
+
+          if (userIndex !== -1) {
+            const user = users[userIndex];
+            user.status = 'true';
+            user.subscription_start = new Date().toISOString();
+
+            writeUsersToCSV(users);
+
+            bot.sendMessage(
+              user.id,
+              `✅ Payment confirmed! Your VIP subscription is now active.`
+            );
+
+            bot.sendMessage(user.id, `Click below to join the VIP group:`, {
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: 'Join VIP Group', url: VIP_GROUP_URL }],
+                ],
+              },
+            });
+          }
+        })
+        .catch((err) => console.error('Error verifying payment:', err));
+    }
+  }
+
+  res.sendStatus(200);
+});
+
 
 // Schedule the expiration check job to run daily at midnight
 schedule.scheduleJob('0 0 * * *', manageSubscriptionExpirations);
