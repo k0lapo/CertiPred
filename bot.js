@@ -348,8 +348,12 @@ function generatePaymentReference() {
 
 schedule.scheduleJob('0 0 * * *', manageSubscriptionExpirations);
 
-const PORT = process.env.PORT || 3001;
+app.get('/', (req, res) => {
+  res.send('Bot is live and running.');
+});
 
-app.listen(PORT, () => {
-  console.log(`✅ Express server listening on port ${PORT}`);
+app.listen(process.env.PORT || 3001, () => {
+  console.log(
+    `✅ Express server listening on port ${process.env.PORT || 3001}`
+  );
 });
