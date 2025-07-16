@@ -170,8 +170,10 @@ bot.on('callback_query', async (callbackQuery) => {
   const data = callbackQuery.data;
   await bot.answerCallbackQuery(callbackQuery.id);
   const users = await readUsersFromCSV();
-  const user = users.find((u) => u.id === String(message.chat.id));
-  if (!user) return;
+  const userIndex = users.findIndex((u) => u.id === String(message.chat.id));
+  if (userIndex === -1) return;
+  const user = users[userIndex];
+
   if (
     data === 'ghana' ||
     data === 'nigeria' ||
@@ -182,10 +184,23 @@ bot.on('callback_query', async (callbackQuery) => {
     let currency = data.includes('ghana')
       ? CURRENCY_MAP.ghana
       : CURRENCY_MAP.nigeria;
+
+    // 🔐 Generate a unique payment reference
+    const paymentReference = generatePaymentReference();
+    user.payment_reference = paymentReference;
+    users[userIndex] = user;
+    writeUsersToCSV(users);
+
+    // 🧾 Initialize Paystack payment
     axios
       .post(
         'https://api.paystack.co/transaction/initialize',
-        { email: user.email, amount, currency },
+        {
+          email: user.email,
+          amount,
+          currency,
+          reference: paymentReference,
+        },
         {
           headers: {
             Authorization: `Bearer ${paystackSecretKey}`,
@@ -197,20 +212,19 @@ bot.on('callback_query', async (callbackQuery) => {
         const paymentUrl = response.data.data.authorization_url;
         bot.sendMessage(
           message.chat.id,
-          `The price is ${amount / 100} ${currency}. Click below to pay:`,
+          `💳 The price is ${amount / 100} ${currency}. Click below to pay:`,
           {
             reply_markup: {
               inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
             },
           }
         );
-        handlePaymentReference(message.chat.id, user, data.startsWith('renew'));
       })
       .catch((error) => {
         console.error('Payment init error:', error.message);
         bot.sendMessage(
           message.chat.id,
-          'Payment initialization failed. Try again.'
+          '❌ Payment initialization failed. Try again.'
         );
       });
   }
