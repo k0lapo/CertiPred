@@ -338,25 +338,25 @@ bot.onText(/\/subscribe/, (msg) => {
   });
 });
 
-async function handlePaymentReference(userId, user, isRenewal = false) {
-  const paymentReference = generatePaymentReference();
+// async function handlePaymentReference(userId, user, isRenewal = false) {
+//   const paymentReference = generatePaymentReference();
 
-  // Store the new payment reference
-  user.payment_reference = paymentReference;
+//   // Store the new payment reference
+//   user.payment_reference = paymentReference;
 
-  // NOTE: We no longer activate or set subscription_start here.
-  const users = await readUsersFromCSV();
-  const updatedUsers = users.map((u) => (u.id === String(userId) ? user : u));
-  writeUsersToCSV(updatedUsers);
+//   // NOTE: We no longer activate or set subscription_start here.
+//   const users = await readUsersFromCSV();
+//   const updatedUsers = users.map((u) => (u.id === String(userId) ? user : u));
+//   writeUsersToCSV(updatedUsers);
 
-  // Notify the user that payment link has been generated
-  bot.sendMessage(
-    userId,
-    `💳 Payment link generated.\n\nPlease complete the payment to activate your ${
-      isRenewal ? 'renewal' : 'subscription'
-    }.`
-  );
-}
+//   // Notify the user that payment link has been generated
+//   bot.sendMessage(
+//     userId,
+//     `💳 Payment link generated.\n\nPlease complete the payment to activate your ${
+//       isRenewal ? 'renewal' : 'subscription'
+//     }.`
+//   );
+// }
 
 function generatePaymentReference() {
   return `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
