@@ -340,19 +340,21 @@ bot.onText(/\/subscribe/, (msg) => {
 
 async function handlePaymentReference(userId, user, isRenewal = false) {
   const paymentReference = generatePaymentReference();
-  const currentStart = new Date(user.subscription_start || new Date());
-  const now = new Date();
-  const effectiveStart = now > currentStart ? now : currentStart;
-  effectiveStart.setDate(effectiveStart.getDate() + 30);
-  user.subscription_start = effectiveStart.toISOString();
-  user.status = 'true';
+
+  // Store the new payment reference
   user.payment_reference = paymentReference;
+
+  // NOTE: We no longer activate or set subscription_start here.
   const users = await readUsersFromCSV();
   const updatedUsers = users.map((u) => (u.id === String(userId) ? user : u));
   writeUsersToCSV(updatedUsers);
+
+  // Notify the user that payment link has been generated
   bot.sendMessage(
     userId,
-    `✅ Subscription ${isRenewal ? 'renewed' : 'activated'} successfully.`
+    `💳 Payment link generated.\n\nPlease complete the payment to activate your ${
+      isRenewal ? 'renewal' : 'subscription'
+    }.`
   );
 }
 
