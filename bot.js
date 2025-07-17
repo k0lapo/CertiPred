@@ -168,32 +168,36 @@ bot.onText(/\/renew/, async (msg) => {
 bot.on('callback_query', async (callbackQuery) => {
   const message = callbackQuery.message;
   const data = callbackQuery.data;
+
+  console.log('Callback query received:', data); // Debugging log
+
   await bot.answerCallbackQuery(callbackQuery.id);
+
   const users = await readUsersFromCSV();
   const userIndex = users.findIndex((u) => u.id === String(message.chat.id));
-  if (userIndex === -1) return;
+  if (userIndex === -1) {
+    return bot.sendMessage(
+      message.chat.id,
+      '❌ User not found. Please register first.'
+    );
+  }
+
   const user = users[userIndex];
 
-  if (
-    data === 'ghana' ||
-    data === 'nigeria' ||
-    data === 'renew_ghana' ||
-    data === 'renew_nigeria'
-  ) {
-    let amount = data.includes('ghana') ? GHANA_PRICE : NIGERIA_PRICE;
-    let currency = data.includes('ghana')
-      ? CURRENCY_MAP.ghana
-      : CURRENCY_MAP.nigeria;
+  if (data === 'ghana' || data === 'nigeria') {
+    const amount = data === 'ghana' ? GHANA_PRICE : NIGERIA_PRICE;
+    const currency =
+      data === 'ghana' ? CURRENCY_MAP.ghana : CURRENCY_MAP.nigeria;
 
-    // 🔐 Generate a unique payment reference
+    // Generate a unique payment reference
     const paymentReference = generatePaymentReference();
     user.payment_reference = paymentReference;
     users[userIndex] = user;
     writeUsersToCSV(users);
 
-    // 🧾 Initialize Paystack payment
-    axios
-      .post(
+    // Initialize Paystack payment
+    try {
+      const response = await axios.post(
         'https://api.paystack.co/transaction/initialize',
         {
           email: user.email,
@@ -207,26 +211,25 @@ bot.on('callback_query', async (callbackQuery) => {
             'Content-Type': 'application/json',
           },
         }
-      )
-      .then((response) => {
-        const paymentUrl = response.data.data.authorization_url;
-        bot.sendMessage(
-          message.chat.id,
-          `💳 The price is ${amount / 100} ${currency}. Click below to pay:`,
-          {
-            reply_markup: {
-              inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
-            },
-          }
-        );
-      })
-      .catch((error) => {
-        console.error('Payment init error:', error.message);
-        bot.sendMessage(
-          message.chat.id,
-          '❌ Payment initialization failed. Try again.'
-        );
-      });
+      );
+
+      const paymentUrl = response.data.data.authorization_url;
+      bot.sendMessage(
+        message.chat.id,
+        `💳 The price is ${amount / 100} ${currency}. Click below to pay:`,
+        {
+          reply_markup: {
+            inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
+          },
+        }
+      );
+    } catch (error) {
+      console.error('Payment initialization error:', error.message);
+      bot.sendMessage(
+        message.chat.id,
+        '❌ Payment initialization failed. Please try again later.'
+      );
+    }
   }
 });
 
