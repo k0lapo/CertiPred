@@ -18,7 +18,7 @@ const tronGridApiKey = process.env.TRONGRID_API_KEY;
 const VIP_GROUP_CHAT_ID = process.env.VIP_GROUP_CHAT_ID;
 const csvFilePath = 'users.csv';
 
-const VIP_GROUP_URL = 'https://t.me/+bmG1AjEf0AYxN2M0';
+const VIP_GROUP_URL = 'https://t.me/+2AsqyFrMUgUwYjM0';
 const GHANA_PRICE = 1 * 100;
 const NIGERIA_PRICE = 100 * 100;
 const CURRENCY_MAP = { nigeria: 'NGN', ghana: 'GHS' };
