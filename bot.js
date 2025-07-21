@@ -235,7 +235,7 @@ bot.on('callback_query', async (callbackQuery) => {
 
 bot.onText(/\/crypto/, (msg) => {
   const chatId = msg.chat.id;
-  const paymentAmount = 32;
+  const paymentAmount = 5;
   const yourTRC20Wallet = 'TMuVT2cUkxRUxatHhUYKcBV7c5vDarm1PE';
   bot.sendMessage(
     chatId,
