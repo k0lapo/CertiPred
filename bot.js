@@ -233,6 +233,15 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 });
 
+function hexToTronBase58(hexAddress) {
+  const base58 = require('bs58check');
+  const addressBytes = Buffer.from(hexAddress.slice(2), 'hex'); // remove 0x
+  const prefix = Buffer.from([0x41]); // Tron addresses start with 41
+  const fullAddress = Buffer.concat([prefix, addressBytes]);
+  return base58.encode(fullAddress);
+}
+
+
 bot.onText(/\/crypto/, (msg) => {
   const chatId = msg.chat.id;
   const paymentAmount = 5;
@@ -246,13 +255,19 @@ bot.onText(/\/crypto/, (msg) => {
 
 bot.onText(/^[a-fA-F0-9]{64}$/, async (msg) => {
   const chatId = msg.chat.id;
-  const txid = msg.text;
+  const txid = msg.text.trim();
+
   const users = await readUsersFromCSV();
   const userIndex = users.findIndex((u) => u.id === String(chatId));
   if (userIndex === -1) return;
+
   const user = users[userIndex];
-  if (user.payment_reference.includes(txid))
-    return bot.sendMessage(chatId, '❗ TXID already used.');
+
+  // Avoid duplicate TXID use
+  if (user.payment_reference && user.payment_reference.includes(txid)) {
+    return bot.sendMessage(chatId, '❗ This TXID has already been used.');
+  }
+
   try {
     const res = await axios.get(
       `https://api.trongrid.io/v1/transactions/${txid}`,
@@ -260,35 +275,47 @@ bot.onText(/^[a-fA-F0-9]{64}$/, async (msg) => {
         headers: { 'TRON-PRO-API-KEY': tronGridApiKey },
       }
     );
+
     const tx = res.data.data[0];
-    if (tx && tx.ret[0].contractRet === 'SUCCESS') {
-      const amount =
-        parseInt(tx.raw_data.contract[0].parameter.value.data, 16) / 1e6;
-      const expectedReceiver = '417b62c8d47c6a5353e03a01d81d5c4e3d3fa0cf15';
-      const to = tx.raw_data.contract[0].parameter.value.contract_address;
-      if (to.toLowerCase() === expectedReceiver.toLowerCase() && amount >= 32) {
-        user.status = 'true';
-        user.subscription_start = new Date().toISOString();
-        user.payment_reference = `USDT-${txid}`;
-        users[userIndex] = user;
-        writeUsersToCSV(users);
-        bot.sendMessage(chatId, `✅ Payment confirmed! Welcome to VIP.`);
-        bot.sendMessage(chatId, `Click below to join:`, {
-          reply_markup: {
-            inline_keyboard: [[{ text: 'Join VIP Group', url: VIP_GROUP_URL }]],
-          },
-        });
-      } else {
-        bot.sendMessage(chatId, '⚠️ Payment validation failed.');
-      }
+    if (!tx || tx.ret[0].contractRet !== 'SUCCESS') {
+      return bot.sendMessage(chatId, '❌ Invalid or failed transaction.');
+    }
+
+    const contract = tx.raw_data.contract[0];
+    const method = contract.parameter.value.data.slice(0, 8);
+    const recipientHex = '0x' + contract.parameter.value.data.slice(32, 72);
+    const amountHex = contract.parameter.value.data.slice(72);
+
+    const recipientAddressBase58 = hexToTronBase58(recipientHex);
+    const amount = parseInt(amountHex, 16) / 1e6;
+
+    const expectedWallet = 'TMuVT2cUkxRUxatHhUYKcBV7c5vDarm1PE';
+    if (
+      method.toLowerCase() === 'a9059cbb' && // transfer(address,uint256)
+      recipientAddressBase58 === expectedWallet &&
+      amount >= 5
+    ) {
+      user.status = 'true';
+      user.subscription_start = new Date().toISOString();
+      user.payment_reference = `USDT-${txid}`;
+      users[userIndex] = user;
+      writeUsersToCSV(users);
+
+      bot.sendMessage(chatId, `✅ Payment confirmed! Welcome to VIP.`);
+      return bot.sendMessage(chatId, `Click below to join:`, {
+        reply_markup: {
+          inline_keyboard: [[{ text: 'Join VIP Group', url: VIP_GROUP_URL }]],
+        },
+      });
     } else {
-      bot.sendMessage(chatId, '❌ Invalid or failed transaction.');
+      return bot.sendMessage(chatId, '⚠️ Payment validation failed.');
     }
   } catch (err) {
-    console.error(err);
-    bot.sendMessage(chatId, 'Error verifying transaction.');
+    console.error('TRON verification error:', err);
+    return bot.sendMessage(chatId, '❌ Error verifying transaction.');
   }
 });
+
 
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
