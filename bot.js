@@ -19,8 +19,8 @@ const VIP_GROUP_CHAT_ID = process.env.VIP_GROUP_CHAT_ID;
 const csvFilePath = 'users.csv';
 
 const VIP_GROUP_URL = 'https://t.me/+2AsqyFrMUgUwYjM0';
-const GHANA_PRICE = 1 * 100;
-const NIGERIA_PRICE = 100 * 100;
+const GHANA_PRICE = 5000 * 100; // GHS 5,000 (pesa)
+const NIGERIA_PRICE = 50000 * 100; // ₦50,000
 const CURRENCY_MAP = { nigeria: 'NGN', ghana: 'GHS' };
 
 const bot = new TelegramBot(token, { webHook: true });
@@ -241,7 +241,6 @@ function hexToTronBase58(hexAddress) {
   return base58.encode(fullAddress);
 }
 
-
 bot.onText(/\/crypto/, (msg) => {
   const chatId = msg.chat.id;
   const paymentAmount = 5;
@@ -315,7 +314,6 @@ bot.onText(/^[a-fA-F0-9]{64}$/, async (msg) => {
     return bot.sendMessage(chatId, '❌ Error verifying transaction.');
   }
 });
-
 
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
