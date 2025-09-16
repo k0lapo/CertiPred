@@ -27,7 +27,13 @@ const bot = new TelegramBot(token, { webHook: true });
 bot.setWebHook(`${url}/bot${token}`);
 
 const app = express();
-app.use(bodyParser.json());
+app.use(
+  bodyParser.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString(); // Save raw request body for signature verification
+    },
+  })
+);
 
 if (!fs.existsSync(csvFilePath)) {
   fs.writeFileSync(
@@ -46,39 +52,58 @@ app.post(`/bot${token}`, (req, res) => {
 });
 
 app.post('/paystack/webhook', (req, res) => {
+  console.log("⚡ Paystack webhook received:", req.body.event, req.body.data?.reference);
+
   const hash = crypto
     .createHmac('sha512', paystackSecretKey)
-    .update(JSON.stringify(req.body))
+    .update(req.rawBody) // ✅ use raw body, not JSON.stringify(req.body)
     .digest('hex');
+
   if (hash === req.headers['x-paystack-signature']) {
     const { event, data } = req.body;
+
     if (event === 'charge.success') {
-      const email = data.customer.email;
+      const email = data.customer.email.toLowerCase();
       const reference = data.reference;
+
       readUsersFromCSV().then((users) => {
-        const userIndex = users.findIndex(
-          (u) => u.email === email && u.payment_reference === reference
-        );
+        // ✅ Match primarily by payment_reference
+        let userIndex = users.findIndex((u) => u.payment_reference === reference);
+
+        // Fallback: match by email if reference missing
+        if (userIndex === -1) {
+          userIndex = users.findIndex(
+            (u) => u.email.toLowerCase() === email
+          );
+        }
+
         if (userIndex !== -1) {
           const user = users[userIndex];
           user.status = 'true';
           user.subscription_start = new Date().toISOString();
+
           writeUsersToCSV(users);
+
           bot.sendMessage(
             user.id,
             `✅ Payment confirmed! Your VIP subscription is now active.`
           );
           bot.sendMessage(user.id, `Click below to join the VIP group:`, {
             reply_markup: {
-              inline_keyboard: [
-                [{ text: 'Join VIP Group', url: VIP_GROUP_URL }],
-              ],
+              inline_keyboard: [[{ text: 'Join VIP Group', url: VIP_GROUP_URL }]],
             },
           });
+
+          console.log(`🎉 User ${user.id} activated and sent VIP link.`);
+        } else {
+          console.warn("⚠️ No matching user found for reference:", reference, "email:", email);
         }
       });
     }
+  } else {
+    console.warn("❌ Paystack webhook signature mismatch.");
   }
+
   res.sendStatus(200);
 });
 
