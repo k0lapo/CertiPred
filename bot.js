@@ -20,7 +20,7 @@ const csvFilePath = 'users.csv';
 
 const VIP_GROUP_URL = 'https://t.me/+2AsqyFrMUgUwYjM0';
 const GHANA_PRICE = 5000 * 100; // GHS 5,000 (pesa)
-const NIGERIA_PRICE = 200 * 100; // ₦50,000
+const NIGERIA_PRICE = 50000 * 100; // ₦50,000
 const CURRENCY_MAP = { nigeria: 'NGN', ghana: 'GHS' };
 
 const bot = new TelegramBot(token, { webHook: true });
@@ -184,10 +184,9 @@ bot.on('callback_query', async (callbackQuery) => {
 
   const user = users[userIndex];
 
-  if (data === 'ghana' || data === 'nigeria') {
-    const amount = data === 'ghana' ? GHANA_PRICE : NIGERIA_PRICE;
-    const currency =
-      data === 'ghana' ? CURRENCY_MAP.ghana : CURRENCY_MAP.nigeria;
+  if (data === 'ghana') {
+    const amount = GHANA_PRICE;
+    const currency = CURRENCY_MAP.ghana;
 
     // Generate a unique payment reference
     const paymentReference = generatePaymentReference();
@@ -195,7 +194,6 @@ bot.on('callback_query', async (callbackQuery) => {
     users[userIndex] = user;
     writeUsersToCSV(users);
 
-    // Initialize Paystack payment
     try {
       const response = await axios.post(
         'https://api.paystack.co/transaction/initialize',
@@ -230,7 +228,28 @@ bot.on('callback_query', async (callbackQuery) => {
         '❌ Payment initialization failed. Please try again later.'
       );
     }
+  } else if (data === 'nigeria') {
+    // Nigeria users → use custom payment page
+    const paymentReference = generatePaymentReference();
+    user.payment_reference = paymentReference;
+    users[userIndex] = user;
+    writeUsersToCSV(users);
+
+    const paymentUrl = `https://paystack.shop/pay/7jka3y1g8l?ref=${paymentReference}&email=${encodeURIComponent(
+      user.email
+    )}`;
+
+    bot.sendMessage(
+      message.chat.id,
+      `💳 The price is ₦50,000. Click below to pay:`,
+      {
+        reply_markup: {
+          inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
+        },
+      }
+    );
   }
+
 });
 
 function hexToTronBase58(hexAddress) {
