@@ -20,7 +20,7 @@ const csvFilePath = 'users.csv';
 
 const VIP_GROUP_URL = 'https://t.me/+2AsqyFrMUgUwYjM0';
 const GHANA_PRICE = 5000 * 100; // GHS 5,000 (pesa)
-const NIGERIA_PRICE = 200 * 100; // ₦50,000
+const NIGERIA_PRICE = 200 * 100; // ₦75,000
 const CURRENCY_MAP = { nigeria: 'NGN', ghana: 'GHS' };
 
 const bot = new TelegramBot(token, { webHook: true });
@@ -241,7 +241,7 @@ bot.on('callback_query', async (callbackQuery) => {
 
     bot.sendMessage(
       message.chat.id,
-      `💳 The price is ₦50,000. Click below to pay:`,
+      `💳 The price is ₦75,000. Click below to pay:`,
       {
         reply_markup: {
           inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
