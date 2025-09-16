@@ -13,14 +13,14 @@ const bodyParser = require('body-parser');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const url = process.env.RENDER_APP_URL;
-const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
+const paystackPrivateKey = process.env.PAYSTACK_SECRET_KEY;
 const tronGridApiKey = process.env.TRONGRID_API_KEY;
 const VIP_GROUP_CHAT_ID = process.env.VIP_GROUP_CHAT_ID;
 const csvFilePath = 'users.csv';
 
 const VIP_GROUP_URL = 'https://t.me/+2AsqyFrMUgUwYjM0';
 const GHANA_PRICE = 5000 * 100; // GHS 5,000 (pesa)
-const NIGERIA_PRICE = 500 * 100; // ₦50,000
+const NIGERIA_PRICE = 200 * 100; // ₦50,000
 const CURRENCY_MAP = { nigeria: 'NGN', ghana: 'GHS' };
 
 const bot = new TelegramBot(token, { webHook: true });
@@ -47,7 +47,7 @@ app.post(`/bot${token}`, (req, res) => {
 
 app.post('/paystack/webhook', (req, res) => {
   const hash = crypto
-    .createHmac('sha512', paystackSecretKey)
+    .createHmac('sha512', paystackPrivateKey)
     .update(JSON.stringify(req.body))
     .digest('hex');
   if (hash === req.headers['x-paystack-signature']) {
@@ -207,7 +207,7 @@ bot.on('callback_query', async (callbackQuery) => {
         },
         {
           headers: {
-            Authorization: `Bearer ${paystackSecretKey}`,
+            Authorization: `Bearer ${paystackPrivateKey}`,
             'Content-Type': 'application/json',
           },
         }
