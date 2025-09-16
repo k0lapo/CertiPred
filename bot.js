@@ -13,7 +13,7 @@ const bodyParser = require('body-parser');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const url = process.env.RENDER_APP_URL;
-const paystackPrivateKey = process.env.PAYSTACK_SECRET_KEY;
+const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
 const tronGridApiKey = process.env.TRONGRID_API_KEY;
 const VIP_GROUP_CHAT_ID = process.env.VIP_GROUP_CHAT_ID;
 const csvFilePath = 'users.csv';
@@ -47,7 +47,7 @@ app.post(`/bot${token}`, (req, res) => {
 
 app.post('/paystack/webhook', (req, res) => {
   const hash = crypto
-    .createHmac('sha512', paystackPrivateKey)
+    .createHmac('sha512', paystackSecretKey)
     .update(JSON.stringify(req.body))
     .digest('hex');
   if (hash === req.headers['x-paystack-signature']) {
@@ -207,7 +207,7 @@ bot.on('callback_query', async (callbackQuery) => {
         },
         {
           headers: {
-            Authorization: `Bearer ${paystackPrivateKey}`,
+            Authorization: `Bearer ${paystackSecretKey}`,
             'Content-Type': 'application/json',
           },
         }
