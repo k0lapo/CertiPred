@@ -1,3 +1,8 @@
+// telegram-paystack-bot-fixed.js
+// Cleaned and corrected version of your bot with Paystack API init for Nigeria,
+// proper webhook signature handling, /verify command, consistent CSV fields,
+// and improved logging.
+
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const csv = require('csv-parser');
@@ -12,29 +17,35 @@ const path = require('path');
 const bodyParser = require('body-parser');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
-const url = process.env.RENDER_APP_URL;
+const url = process.env.RENDER_APP_URL; // e.g. https://your-app.onrender.com
 const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
 const tronGridApiKey = process.env.TRONGRID_API_KEY;
-const VIP_GROUP_CHAT_ID = process.env.VIP_GROUP_CHAT_ID;
+const VIP_GROUP_CHAT_ID = process.env.VIP_GROUP_CHAT_ID; // numeric chat id for programmatic actions
 const csvFilePath = 'users.csv';
 
 const VIP_GROUP_URL = 'https://t.me/+2AsqyFrMUgUwYjM0';
-const GHANA_PRICE = 5000 * 100; // GHS 5,000 (pesa)
-const NIGERIA_PRICE = 200 * 100; // ₦75,000
+const GHANA_PRICE = 5000 * 100; // GHS 5,000 (Paystack expects minor unit)
+const NIGERIA_PRICE = 75000 * 100; // ₦75,000 -> 75,000 * 100 (kobo)
 const CURRENCY_MAP = { nigeria: 'NGN', ghana: 'GHS' };
 
+if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN in .env');
+if (!url) console.warn('RENDER_APP_URL missing in .env — webhook may not set correctly');
+
 const bot = new TelegramBot(token, { webHook: true });
-bot.setWebHook(`${url}/bot${token}`);
+if (url) bot.setWebHook(`${url}/bot${token}`);
 
 const app = express();
+
+// capture raw body for Paystack signature verification
 app.use(
   bodyParser.json({
     verify: (req, res, buf) => {
-      req.rawBody = buf.toString(); // Save raw request body for signature verification
+      req.rawBody = buf.toString();
     },
   })
 );
 
+// ensure users.csv exists with expected header
 if (!fs.existsSync(csvFilePath)) {
   fs.writeFileSync(
     csvFilePath,
@@ -51,60 +62,72 @@ app.post(`/bot${token}`, (req, res) => {
   res.sendStatus(200);
 });
 
+// PAYSTACK WEBHOOK
 app.post('/paystack/webhook', (req, res) => {
-  console.log("⚡ Paystack webhook received:", req.body.event, req.body.data?.reference);
+  // Immediately respond 200 to avoid retries by Paystack, but still process.
+  res.sendStatus(200);
 
-  const hash = crypto
-    .createHmac('sha512', paystackSecretKey)
-    .update(req.rawBody) // ✅ use raw body, not JSON.stringify(req.body)
-    .digest('hex');
+  try {
+    console.log('⚡ Paystack raw body:', req.rawBody?.slice(0, 1000));
+    const signature = req.headers['x-paystack-signature'];
+    if (!signature) {
+      console.warn('⚠️ No x-paystack-signature header present');
+      return;
+    }
 
-  if (hash === req.headers['x-paystack-signature']) {
+    const hash = crypto
+      .createHmac('sha512', paystackSecretKey)
+      .update(req.rawBody)
+      .digest('hex');
+
+    if (hash !== signature) {
+      console.warn('❌ Paystack signature mismatch.');
+      return;
+    }
+
     const { event, data } = req.body;
+    console.log('⚡ Paystack event:', event, 'ref:', data?.reference);
 
     if (event === 'charge.success') {
-      const email = data.customer.email.toLowerCase();
+      const email = (data.customer?.email || '').toLowerCase();
       const reference = data.reference;
 
-      readUsersFromCSV().then((users) => {
-        // ✅ Match primarily by payment_reference
-        let userIndex = users.findIndex((u) => u.payment_reference === reference);
+      readUsersFromCSV()
+        .then((users) => {
+          // Prefer match by reference, fallback to email
+          let userIndex = users.findIndex((u) => u.payment_reference === reference);
+          if (userIndex === -1 && email) {
+            userIndex = users.findIndex((u) => (u.email || '').toLowerCase() === email);
+          }
 
-        // Fallback: match by email if reference missing
-        if (userIndex === -1) {
-          userIndex = users.findIndex(
-            (u) => u.email.toLowerCase() === email
-          );
-        }
+          if (userIndex !== -1) {
+            const user = users[userIndex];
+            user.status = 'true';
+            user.subscription_start = new Date().toISOString();
+            // ensure payment_reference is stored
+            user.payment_reference = reference || user.payment_reference;
+            users[userIndex] = user;
+            writeUsersToCSV(users);
 
-        if (userIndex !== -1) {
-          const user = users[userIndex];
-          user.status = 'true';
-          user.subscription_start = new Date().toISOString();
+            bot.sendMessage(user.id, `✅ Payment confirmed! Your VIP subscription is now active.`).catch(console.error);
+            bot
+              .sendMessage(user.id, 'Click below to join the VIP group:', {
+                reply_markup: {
+                  inline_keyboard: [[{ text: 'Join VIP Group', url: VIP_GROUP_URL }]],
+                },
+              })
+              .catch(console.error);
 
-          writeUsersToCSV(users);
-
-          bot.sendMessage(
-            user.id,
-            `✅ Payment confirmed! Your VIP subscription is now active.`
-          );
-          bot.sendMessage(user.id, `Click below to join the VIP group:`, {
-            reply_markup: {
-              inline_keyboard: [[{ text: 'Join VIP Group', url: VIP_GROUP_URL }]],
-            },
-          });
-
-          console.log(`🎉 User ${user.id} activated and sent VIP link.`);
-        } else {
-          console.warn("⚠️ No matching user found for reference:", reference, "email:", email);
-        }
-      });
+            console.log(`🎉 Activated user ${user.id} for ref ${reference}`);
+          } else {
+            console.warn('⚠️ No user match for paystack event. ref=', reference, 'email=', email);
+          }
+        })
+        .catch((err) => console.error('Error reading users CSV on webhook:', err));
     }
-  } else {
-    console.warn("❌ Paystack webhook signature mismatch.");
+  } catch (err) {
+    console.error('❌ Exception handling Paystack webhook:', err);
   }
-
-  res.sendStatus(200);
 });
 
 function readUsersFromCSV() {
@@ -119,13 +142,16 @@ function readUsersFromCSV() {
 }
 
 function writeUsersToCSV(users) {
+  // ensure consistent column order matching header
+  const fields = ['id', 'username', 'first_name', 'last_name', 'email', 'status', 'payment_reference', 'subscription_start'];
   lockfile
     .lock(csvFilePath, { retries: 3 })
     .then((release) => {
-      fs.writeFileSync(csvFilePath, parse(users, { header: true }));
+      const csvData = parse(users, { fields });
+      fs.writeFileSync(csvFilePath, csvData + '\n');
       release();
     })
-    .catch(console.error);
+    .catch((err) => console.error('Error writing users CSV:', err));
 }
 
 async function manageSubscriptionExpirations() {
@@ -135,21 +161,16 @@ async function manageSubscriptionExpirations() {
   for (let user of users) {
     if (!user.subscription_start || user.status !== 'true') continue;
     const subscriptionStart = new Date(user.subscription_start);
-    const daysDiff = Math.floor(
-      (currentDate - subscriptionStart) / (1000 * 60 * 60 * 24)
-    );
+    const daysDiff = Math.floor((currentDate - subscriptionStart) / (1000 * 60 * 60 * 24));
     if (daysDiff === 25) {
-      bot.sendMessage(user.id, `⏳ Your VIP subscription expires in 5 days.`);
+      bot.sendMessage(user.id, `⏳ Your VIP subscription expires in 5 days.`).catch(console.error);
     } else if (daysDiff === 29) {
-      bot.sendMessage(user.id, `⚠️ Your VIP subscription expires tomorrow.`);
+      bot.sendMessage(user.id, `⚠️ Your VIP subscription expires tomorrow.`).catch(console.error);
     } else if (daysDiff >= 30) {
       try {
         await bot.banChatMember(VIP_GROUP_CHAT_ID, user.id);
         await bot.unbanChatMember(VIP_GROUP_CHAT_ID, user.id);
-        bot.sendMessage(
-          user.id,
-          `🚫 Subscription expired. You have been removed.`
-        );
+        bot.sendMessage(user.id, `🚫 Subscription expired. You have been removed.`).catch(console.error);
         user.status = 'false';
         updated = true;
       } catch (err) {
@@ -161,18 +182,13 @@ async function manageSubscriptionExpirations() {
 }
 
 bot.onText(/\/status/, async (msg) => {
-  const user = (await readUsersFromCSV()).find(
-    (u) => u.id === String(msg.chat.id)
-  );
-  if (!user || user.status !== 'true')
-    return bot.sendMessage(msg.chat.id, '❌ Not an active VIP member.');
+  const users = await readUsersFromCSV();
+  const user = users.find((u) => u.id === String(msg.chat.id));
+  if (!user || user.status !== 'true') return bot.sendMessage(msg.chat.id, '❌ Not an active VIP member.');
   const expiry = new Date(user.subscription_start);
   expiry.setDate(expiry.getDate() + 30);
   const daysLeft = Math.ceil((expiry - new Date()) / (1000 * 60 * 60 * 24));
-  bot.sendMessage(
-    msg.chat.id,
-    `✅ VIP active\nExpires in: ${daysLeft} day(s)\nDate: ${expiry.toDateString()}`
-  );
+  bot.sendMessage(msg.chat.id, `✅ VIP active\nExpires in: ${daysLeft} day(s)\nDate: ${expiry.toDateString()}`).catch(console.error);
 });
 
 bot.onText(/\/renew/, async (msg) => {
@@ -187,33 +203,25 @@ bot.onText(/\/renew/, async (msg) => {
         [{ text: '💱 USDT (Crypto)', callback_data: 'crypto' }],
       ],
     },
-  });
+  }).catch(console.error);
 });
 
 bot.on('callback_query', async (callbackQuery) => {
   const message = callbackQuery.message;
   const data = callbackQuery.data;
+  await bot.answerCallbackQuery(callbackQuery.id).catch(console.error);
 
-  console.log('Callback query received:', data); // Debugging log
-
-  await bot.answerCallbackQuery(callbackQuery.id);
+  console.log('Callback query received:', data);
 
   const users = await readUsersFromCSV();
   const userIndex = users.findIndex((u) => u.id === String(message.chat.id));
-  if (userIndex === -1) {
-    return bot.sendMessage(
-      message.chat.id,
-      '❌ User not found. Please register first.'
-    );
-  }
+  if (userIndex === -1) return bot.sendMessage(message.chat.id, '❌ User not found. Please register first.');
 
   const user = users[userIndex];
 
   if (data === 'ghana') {
     const amount = GHANA_PRICE;
     const currency = CURRENCY_MAP.ghana;
-
-    // Generate a unique payment reference
     const paymentReference = generatePaymentReference();
     user.payment_reference = paymentReference;
     users[userIndex] = user;
@@ -222,88 +230,48 @@ bot.on('callback_query', async (callbackQuery) => {
     try {
       const response = await axios.post(
         'https://api.paystack.co/transaction/initialize',
-        {
-          email: user.email,
-          amount,
-          currency,
-          reference: paymentReference,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${paystackSecretKey}`,
-            'Content-Type': 'application/json',
-          },
-        }
+        { email: user.email, amount, currency, reference: paymentReference },
+        { headers: { Authorization: `Bearer ${paystackSecretKey}`, 'Content-Type': 'application/json' } }
       );
 
       const paymentUrl = response.data.data.authorization_url;
-      bot.sendMessage(
-        message.chat.id,
-        `💳 The price is ${amount / 100} ${currency}. Click below to pay:`,
-        {
-          reply_markup: {
-            inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
-          },
-        }
-      );
+      bot.sendMessage(message.chat.id, `💳 The price is ${amount / 100} ${currency}. Click below to pay:`, {
+        reply_markup: { inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]] },
+      }).catch(console.error);
     } catch (error) {
-      console.error('Payment initialization error:', error.message);
-      bot.sendMessage(
-        message.chat.id,
-        '❌ Payment initialization failed. Please try again later.'
-      );
+      console.error('Payment initialization error (Ghana):', error.response?.data || error.message);
+      bot.sendMessage(message.chat.id, '❌ Payment initialization failed. Please try again later.').catch(console.error);
     }
-  } else if (data === 'nigeria') {
-  const amount = NIGERIA_PRICE; // ₦75,000
-  const currency = CURRENCY_MAP.nigeria;
+  } else if (data === 'nigeria' || data === 'renew_nigeria') {
+    const amount = NIGERIA_PRICE;
+    const currency = CURRENCY_MAP.nigeria;
+    const paymentReference = generatePaymentReference();
+    user.payment_reference = paymentReference;
+    users[userIndex] = user;
+    writeUsersToCSV(users);
 
-  // Generate unique payment reference
-  const paymentReference = generatePaymentReference();
-  user.payment_reference = paymentReference;
-  users[userIndex] = user;
-  writeUsersToCSV(users);
+    try {
+      const response = await axios.post(
+        'https://api.paystack.co/transaction/initialize',
+        { email: user.email, amount, currency, reference: paymentReference },
+        { headers: { Authorization: `Bearer ${paystackSecretKey}`, 'Content-Type': 'application/json' } }
+      );
 
-  try {
-    const response = await axios.post(
-      'https://api.paystack.co/transaction/initialize',
-      {
-        email: user.email,
-        amount,
-        currency,
-        reference: paymentReference,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${paystackSecretKey}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    const paymentUrl = response.data.data.authorization_url;
-    bot.sendMessage(
-      message.chat.id,
-      `💳 The price is ₦75,000. Click below to pay:`,
-      {
-        reply_markup: {
-          inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
-        },
-      }
-    );
-  } catch (error) {
-    console.error('Payment initialization error (Nigeria):', error.message);
-    bot.sendMessage(
-      message.chat.id,
-      '❌ Payment initialization failed. Please try again later.'
-    );
+      const paymentUrl = response.data.data.authorization_url;
+      bot.sendMessage(message.chat.id, `💳 The price is ₦${amount / 100}. Click below to pay:`, {
+        reply_markup: { inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]] },
+      }).catch(console.error);
+    } catch (error) {
+      console.error('Payment initialization error (Nigeria):', error.response?.data || error.message);
+      bot.sendMessage(message.chat.id, '❌ Payment initialization failed. Please try again later.').catch(console.error);
+    }
   }
-}
-}
+});
 
 function hexToTronBase58(hexAddress) {
   const base58 = require('bs58check');
-  const addressBytes = Buffer.from(hexAddress.slice(2), 'hex'); // remove 0x
-  const prefix = Buffer.from([0x41]); // Tron addresses start with 41
+  const addressBytes = Buffer.from(hexAddress.slice(2), 'hex');
+  const prefix = Buffer.from([0x41]);
   const fullAddress = Buffer.concat([prefix, addressBytes]);
   return base58.encode(fullAddress);
 }
@@ -313,31 +281,27 @@ bot.onText(/\/verify (.+)/, async (msg, match) => {
   const reference = match[1].trim();
 
   try {
-    const response = await axios.get(
-      `https://api.paystack.co/transaction/verify/${reference}`,
-      {
-        headers: {
-          Authorization: `Bearer ${paystackSecretKey}`,
-        },
-      }
-    );
+    const response = await axios.get(`https://api.paystack.co/transaction/verify/${reference}`, {
+      headers: { Authorization: `Bearer ${paystackSecretKey}` },
+    });
 
     const data = response.data.data;
 
     if (data.status === 'success') {
-      bot.sendMessage(
-        chatId,
-        `✅ Payment verified!\n\nAmount: ₦${(data.amount / 100).toLocaleString()}\nEmail: ${data.customer.email}\nRef: ${data.reference}`
-      );
+      await bot.sendMessage(chatId, `✅ Payment verified!\n\nAmount: ${data.currency} ${data.amount / 100}\nEmail: ${data.customer.email}\nRef: ${data.reference}`);
 
-      // optional: activate user if not already done
-      let users = readUsersFromCSV();
-      const userIndex = users.findIndex((u) => u.payment_reference === reference);
-      if (userIndex !== -1 && !users[userIndex].is_active) {
-        users[userIndex].is_active = true;
+      const users = await readUsersFromCSV();
+      const userIndex = users.findIndex((u) => u.payment_reference === reference || (u.email || '').toLowerCase() === (data.customer.email || '').toLowerCase());
+      if (userIndex !== -1) {
+        const user = users[userIndex];
+        user.status = 'true';
+        user.subscription_start = new Date().toISOString();
+        user.payment_reference = reference;
+        users[userIndex] = user;
         writeUsersToCSV(users);
-        bot.sendMessage(chatId, '🎉 You are now activated! Here’s your VIP join link:');
-        bot.sendMessage(chatId, VIP_GROUP_LINK);
+
+        await bot.sendMessage(chatId, '🎉 You are now activated! Here’s your VIP join link:');
+        await bot.sendMessage(chatId, VIP_GROUP_URL);
       }
     } else {
       bot.sendMessage(chatId, `❌ Payment not successful.\nStatus: ${data.status}`);
@@ -348,7 +312,6 @@ bot.onText(/\/verify (.+)/, async (msg, match) => {
   }
 });
 
-
 bot.onText(/\/crypto/, (msg) => {
   const chatId = msg.chat.id;
   const paymentAmount = 5;
@@ -357,7 +320,7 @@ bot.onText(/\/crypto/, (msg) => {
     chatId,
     `🔐 *Crypto Payment - USDT (TRC-20)*\n\nPlease send *${paymentAmount} USDT* to:\n\`${yourTRC20Wallet}\`\n\nReply with the *TXID* to verify.`,
     { parse_mode: 'Markdown' }
-  );
+  ).catch(console.error);
 });
 
 bot.onText(/^[a-fA-F0-9]{64}$/, async (msg) => {
@@ -370,22 +333,16 @@ bot.onText(/^[a-fA-F0-9]{64}$/, async (msg) => {
 
   const user = users[userIndex];
 
-  // Avoid duplicate TXID use
   if (user.payment_reference && user.payment_reference.includes(txid)) {
-    return bot.sendMessage(chatId, '❗ This TXID has already been used.');
+    return bot.sendMessage(chatId, '❗ This TXID has already been used.').catch(console.error);
   }
 
   try {
-    const res = await axios.get(
-      `https://api.trongrid.io/v1/transactions/${txid}`,
-      {
-        headers: { 'TRON-PRO-API-KEY': tronGridApiKey },
-      }
-    );
+    const res = await axios.get(`https://api.trongrid.io/v1/transactions/${txid}`, { headers: { 'TRON-PRO-API-KEY': tronGridApiKey } });
 
     const tx = res.data.data[0];
     if (!tx || tx.ret[0].contractRet !== 'SUCCESS') {
-      return bot.sendMessage(chatId, '❌ Invalid or failed transaction.');
+      return bot.sendMessage(chatId, '❌ Invalid or failed transaction.').catch(console.error);
     }
 
     const contract = tx.raw_data.contract[0];
@@ -397,105 +354,79 @@ bot.onText(/^[a-fA-F0-9]{64}$/, async (msg) => {
     const amount = parseInt(amountHex, 16) / 1e6;
 
     const expectedWallet = 'TMuVT2cUkxRUxatHhUYKcBV7c5vDarm1PE';
-    if (
-      method.toLowerCase() === 'a9059cbb' && // transfer(address,uint256)
-      recipientAddressBase58 === expectedWallet &&
-      amount >= 5
-    ) {
+    if (method.toLowerCase() === 'a9059cbb' && recipientAddressBase58 === expectedWallet && amount >= 5) {
       user.status = 'true';
       user.subscription_start = new Date().toISOString();
       user.payment_reference = `USDT-${txid}`;
       users[userIndex] = user;
       writeUsersToCSV(users);
 
-      bot.sendMessage(chatId, `✅ Payment confirmed! Welcome to VIP.`);
+      await bot.sendMessage(chatId, `✅ Payment confirmed! Welcome to VIP.`);
       return bot.sendMessage(chatId, `Click below to join:`, {
-        reply_markup: {
-          inline_keyboard: [[{ text: 'Join VIP Group', url: VIP_GROUP_URL }]],
-        },
-      });
+        reply_markup: { inline_keyboard: [[{ text: 'Join VIP Group', url: VIP_GROUP_URL }]] },
+      }).catch(console.error);
     } else {
-      return bot.sendMessage(chatId, '⚠️ Payment validation failed.');
+      return bot.sendMessage(chatId, '⚠️ Payment validation failed.').catch(console.error);
     }
   } catch (err) {
     console.error('TRON verification error:', err);
-    return bot.sendMessage(chatId, '❌ Error verifying transaction.');
+    return bot.sendMessage(chatId, '❌ Error verifying transaction.').catch(console.error);
   }
 });
 
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   bot
-    .sendPhoto(chatId, 'TC.png', {
-      caption: 'Please read the terms and conditions.',
-    })
-    .then(() => bot.sendMessage(chatId, 'Please provide your email address:'));
-  bot.once('message', (msg) => {
-    if (msg.text && !msg.text.startsWith('/')) {
-      const email = msg.text;
+    .sendPhoto(chatId, 'TC.png', { caption: 'Please read the terms and conditions.' })
+    .then(() => bot.sendMessage(chatId, 'Please provide your email address:'))
+    .catch(console.error);
+
+  const collector = (reply) => {
+    if (reply.chat && reply.chat.id === chatId && reply.text && !reply.text.startsWith('/')) {
+      const email = reply.text.trim();
       const user = {
-        id: msg.from.id,
-        username: msg.from.username || '',
-        first_name: msg.from.first_name || '',
-        last_name: msg.from.last_name || '',
+        id: reply.from.id,
+        username: reply.from.username || '',
+        first_name: reply.from.first_name || '',
+        last_name: reply.from.last_name || '',
         email,
         status: 'false',
         payment_reference: '',
         subscription_start: '',
       };
-      readUsersFromCSV().then((users) => {
-        const exists = users.some((u) => u.id === String(user.id));
-        if (!exists) {
-          users.push(user);
-          writeUsersToCSV(users);
-          bot.sendMessage(
-            chatId,
-            'You have been registered. Click /subscribe.'
-          );
-        } else {
-          bot.sendMessage(chatId, 'Welcome back. Click /subscribe.');
-        }
-      });
-    } else {
-      bot.sendMessage(chatId, 'Invalid email. Use /start again.');
+
+      readUsersFromCSV()
+        .then((users) => {
+          const exists = users.some((u) => u.id === String(user.id));
+          if (!exists) {
+            users.push(user);
+            writeUsersToCSV(users);
+            bot.sendMessage(chatId, 'You have been registered. Click /subscribe.').catch(console.error);
+          } else {
+            bot.sendMessage(chatId, 'Welcome back. Click /subscribe.').catch(console.error);
+          }
+        })
+        .catch((err) => console.error('Error reading users on /start:', err));
+
+      // remove listener after use
+      bot.removeListener('message', collector);
     }
-  });
+  };
+
+  bot.on('message', collector);
 });
 
 bot.onText(/\/subscribe/, (msg) => {
   const chatId = msg.chat.id;
   bot.sendMessage(chatId, 'Where are you paying from?', {
     reply_markup: {
-      inline_keyboard: [
-        [{ text: 'Nigeria', callback_data: 'nigeria' }],
-        [{ text: 'Ghana', callback_data: 'ghana' }],
-      ],
+      inline_keyboard: [[{ text: 'Nigeria', callback_data: 'nigeria' }], [{ text: 'Ghana', callback_data: 'ghana' }]],
     },
-  });
+  }).catch(console.error);
 });
 
-// async function handlePaymentReference(userId, user, isRenewal = false) {
-//   const paymentReference = generatePaymentReference();
-
-//   // Store the new payment reference
-//   user.payment_reference = paymentReference;
-
-//   // NOTE: We no longer activate or set subscription_start here.
-//   const users = await readUsersFromCSV();
-//   const updatedUsers = users.map((u) => (u.id === String(userId) ? user : u));
-//   writeUsersToCSV(updatedUsers);
-
-//   // Notify the user that payment link has been generated
-//   bot.sendMessage(
-//     userId,
-//     `💳 Payment link generated.\n\nPlease complete the payment to activate your ${
-//       isRenewal ? 'renewal' : 'subscription'
-//     }.`
-//   );
-// }
-
 function generatePaymentReference() {
-  return `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return `PAY-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
 }
 
 schedule.scheduleJob('0 0 * * *', manageSubscriptionExpirations);
@@ -505,7 +436,5 @@ app.get('/', (req, res) => {
 });
 
 app.listen(process.env.PORT || 3001, () => {
-  console.log(
-    `✅ Express server listening on port ${process.env.PORT || 3001}`
-  );
+  console.log(`✅ Express server listening on port ${process.env.PORT || 3001}`);
 });
