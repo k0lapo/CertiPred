@@ -254,16 +254,33 @@ bot.on('callback_query', async (callbackQuery) => {
       );
     }
   } else if (data === 'nigeria') {
-    // Nigeria users → use custom payment page
-    const paymentReference = generatePaymentReference();
-    user.payment_reference = paymentReference;
-    users[userIndex] = user;
-    writeUsersToCSV(users);
+  const amount = NIGERIA_PRICE; // ₦75,000
+  const currency = CURRENCY_MAP.nigeria;
 
-    const paymentUrl = `https://paystack.shop/pay/7jka3y1g8l?ref=${paymentReference}&email=${encodeURIComponent(
-      user.email
-    )}`;
+  // Generate unique payment reference
+  const paymentReference = generatePaymentReference();
+  user.payment_reference = paymentReference;
+  users[userIndex] = user;
+  writeUsersToCSV(users);
 
+  try {
+    const response = await axios.post(
+      'https://api.paystack.co/transaction/initialize',
+      {
+        email: user.email,
+        amount,
+        currency,
+        reference: paymentReference,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${paystackSecretKey}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const paymentUrl = response.data.data.authorization_url;
     bot.sendMessage(
       message.chat.id,
       `💳 The price is ₦75,000. Click below to pay:`,
@@ -273,8 +290,15 @@ bot.on('callback_query', async (callbackQuery) => {
         },
       }
     );
+  } catch (error) {
+    console.error('Payment initialization error (Nigeria):', error.message);
+    bot.sendMessage(
+      message.chat.id,
+      '❌ Payment initialization failed. Please try again later.'
+    );
   }
-});
+}
+}
 
 function hexToTronBase58(hexAddress) {
   const base58 = require('bs58check');
