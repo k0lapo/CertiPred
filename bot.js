@@ -308,6 +308,47 @@ function hexToTronBase58(hexAddress) {
   return base58.encode(fullAddress);
 }
 
+bot.onText(/\/verify (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const reference = match[1].trim();
+
+  try {
+    const response = await axios.get(
+      `https://api.paystack.co/transaction/verify/${reference}`,
+      {
+        headers: {
+          Authorization: `Bearer ${paystackSecretKey}`,
+        },
+      }
+    );
+
+    const data = response.data.data;
+
+    if (data.status === 'success') {
+      bot.sendMessage(
+        chatId,
+        `✅ Payment verified!\n\nAmount: ₦${(data.amount / 100).toLocaleString()}\nEmail: ${data.customer.email}\nRef: ${data.reference}`
+      );
+
+      // optional: activate user if not already done
+      let users = readUsersFromCSV();
+      const userIndex = users.findIndex((u) => u.payment_reference === reference);
+      if (userIndex !== -1 && !users[userIndex].is_active) {
+        users[userIndex].is_active = true;
+        writeUsersToCSV(users);
+        bot.sendMessage(chatId, '🎉 You are now activated! Here’s your VIP join link:');
+        bot.sendMessage(chatId, VIP_GROUP_LINK);
+      }
+    } else {
+      bot.sendMessage(chatId, `❌ Payment not successful.\nStatus: ${data.status}`);
+    }
+  } catch (error) {
+    console.error('Verification error:', error.response?.data || error.message);
+    bot.sendMessage(chatId, '⚠️ Could not verify payment. Please try again later.');
+  }
+});
+
+
 bot.onText(/\/crypto/, (msg) => {
   const chatId = msg.chat.id;
   const paymentAmount = 5;
