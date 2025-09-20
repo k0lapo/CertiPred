@@ -32,7 +32,9 @@ if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN in .env');
 if (!url) console.warn('RENDER_APP_URL missing in .env — webhook may not set correctly');
 
 const bot = new TelegramBot(token, { webHook: true });
-if (url) bot.setWebHook(`${url}/bot${token}`);
+if (url) {
+  bot.setWebHook(`${url}/webhook`);
+}
 
 const app = express();
 
@@ -57,11 +59,11 @@ app.get('/users.csv', (req, res) => {
   res.sendFile(path.join(__dirname, csvFilePath));
 });
 
-app.post(`/bot${token}`, (req, res) => {
+// Telegram webhook endpoint
+app.post('/webhook', (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
-
 // PAYSTACK WEBHOOK
 app.post('/paystack/webhook', (req, res) => {
   // Immediately respond 200 to avoid retries by Paystack, but still process.
