@@ -99,7 +99,6 @@ app.post('/paystack/webhook', (req, res) => {
 
       readUsersFromCSV()
         .then((users) => {
-          // Prefer match by reference, fallback to email
           let userIndex = users.findIndex(
             (u) => u.payment_reference === reference
           );
@@ -113,22 +112,23 @@ app.post('/paystack/webhook', (req, res) => {
             const user = users[userIndex];
             user.status = 'true';
             user.subscription_start = new Date().toISOString();
-            // ensure payment_reference is stored
             user.payment_reference = reference || user.payment_reference;
             users[userIndex] = user;
             writeUsersToCSV(users);
 
+            // ✅ Notify user and send join link
             bot
               .sendMessage(
                 user.id,
-                `✅ Payment confirmed! Your VIP subscription is now active.`
+                `✅ Payment confirmed!\n\nWelcome to CertiPred VIP 🎉`
               )
               .catch(console.error);
+
             bot
               .sendMessage(user.id, 'Click below to join the VIP group:', {
                 reply_markup: {
                   inline_keyboard: [
-                    [{ text: 'Join VIP Group', url: VIP_GROUP_URL }],
+                    [{ text: '🚀 Join VIP Group', url: VIP_GROUP_URL }],
                   ],
                 },
               })
@@ -148,6 +148,7 @@ app.post('/paystack/webhook', (req, res) => {
           console.error('Error reading users CSV on webhook:', err)
         );
     }
+
   } catch (err) {
     console.error('❌ Exception handling Paystack webhook:', err);
   }
