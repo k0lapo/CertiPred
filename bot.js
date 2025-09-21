@@ -25,7 +25,7 @@ const csvFilePath = 'users.csv';
 
 const VIP_GROUP_URL = 'https://t.me/+2AsqyFrMUgUwYjM0';
 const GHANA_PRICE = 5000 * 100; // GHS 5,000 (Paystack expects minor unit)
-const NIGERIA_PRICE = 75000 * 100; // ₦75,000 -> 75,000 * 100 (kobo)
+const NIGERIA_PRICE = 200 * 100; // ₦75,000 -> 75,000 * 100 (kobo)
 const CURRENCY_MAP = { nigeria: 'NGN', ghana: 'GHS' };
 
 if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN in .env');
@@ -148,7 +148,6 @@ app.post('/paystack/webhook', (req, res) => {
           console.error('Error reading users CSV on webhook:', err)
         );
     }
-
   } catch (err) {
     console.error('❌ Exception handling Paystack webhook:', err);
   }
