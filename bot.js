@@ -116,7 +116,7 @@ app.post('/paystack/webhook', (req, res) => {
             users[userIndex] = user;
             writeUsersToCSV(users);
 
-            // ✅ Notify user and send join link
+            // 🎉 Notify & Send VIP Group Button
             bot
               .sendMessage(
                 user.id,
@@ -125,10 +125,10 @@ app.post('/paystack/webhook', (req, res) => {
               .catch(console.error);
 
             bot
-              .sendMessage(user.id, 'Click below to join the VIP group:', {
+              .sendMessage(user.id, '🚀 Click below to join the VIP group:', {
                 reply_markup: {
                   inline_keyboard: [
-                    [{ text: '🚀 Join VIP Group', url: VIP_GROUP_URL }],
+                    [{ text: 'Join VIP Group', url: VIP_GROUP_URL }],
                   ],
                 },
               })
