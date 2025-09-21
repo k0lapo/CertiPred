@@ -1,8 +1,3 @@
-// telegram-paystack-bot-fixed.js
-// Cleaned and corrected version of your bot with Paystack API init for Nigeria,
-// proper webhook signature handling, /verify command, consistent CSV fields,
-// and improved logging.
-
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const csv = require('csv-parser');
@@ -383,7 +378,17 @@ bot.on('callback_query', async (callbackQuery) => {
     try {
       const response = await axios.post(
         'https://api.paystack.co/transaction/initialize',
-        { email: user.email, amount, currency, reference: paymentReference },
+        {
+          email: user.email,
+          amount,
+          currency,
+          reference: paymentReference,
+          metadata: {
+            telegram_id: message.chat.id, // 👈 ensure webhook knows user
+            first_name: message.from.first_name,
+            username: message.from.username,
+          },
+        },
         {
           headers: {
             Authorization: `Bearer ${paystackSecretKey}`,
