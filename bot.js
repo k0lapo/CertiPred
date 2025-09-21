@@ -67,13 +67,13 @@ app.post('/webhook', (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
+
 // PAYSTACK WEBHOOK
 app.post('/paystack/webhook', (req, res) => {
-  // Immediately respond 200 to avoid retries by Paystack, but still process.
+  // Respond quickly so Paystack doesn’t retry
   res.sendStatus(200);
 
   try {
-    console.log('⚡ Paystack raw body:', req.rawBody?.slice(0, 1000));
     const signature = req.headers['x-paystack-signature'];
     if (!signature) {
       console.warn('⚠️ No x-paystack-signature header present');
@@ -96,52 +96,101 @@ app.post('/paystack/webhook', (req, res) => {
     if (event === 'charge.success') {
       const email = (data.customer?.email || '').toLowerCase();
       const reference = data.reference;
+      const telegramId = data.metadata?.telegram_id;
+      const firstName = data.metadata?.first_name || '';
+      const username = data.metadata?.username || '';
 
       readUsersFromCSV()
         .then((users) => {
+          // 🔎 Try to find by payment reference, Telegram ID, or email
           let userIndex = users.findIndex(
-            (u) => u.payment_reference === reference
+            (u) =>
+              u.payment_reference === reference ||
+              (telegramId && u.id == telegramId) ||
+              (email && (u.email || '').toLowerCase() === email)
           );
-          if (userIndex === -1 && email) {
-            userIndex = users.findIndex(
-              (u) => (u.email || '').toLowerCase() === email
-            );
-          }
 
           if (userIndex !== -1) {
+            // ✅ Existing user → update subscription
             const user = users[userIndex];
             user.status = 'true';
             user.subscription_start = new Date().toISOString();
             user.payment_reference = reference || user.payment_reference;
+
+            // If metadata includes Telegram info, update it too
+            if (telegramId) user.id = telegramId;
+            if (firstName) user.first_name = firstName;
+            if (username) user.username = username;
+            if (email) user.email = email;
+
             users[userIndex] = user;
             writeUsersToCSV(users);
 
-            // 🎉 Notify & Send VIP Group Button
-            bot
-              .sendMessage(
-                user.id,
-                `✅ Payment confirmed!\n\nWelcome to CertiPred VIP 🎉`
-              )
-              .catch(console.error);
+            // 🎉 Notify user
+            if (telegramId) {
+              bot
+                .sendMessage(
+                  telegramId,
+                  `✅ Payment confirmed!\n\nWelcome back to CertiPred VIP 🎉`
+                )
+                .catch(console.error);
 
-            bot
-              .sendMessage(user.id, '🚀 Click below to join the VIP group:', {
-                reply_markup: {
-                  inline_keyboard: [
-                    [{ text: 'Join VIP Group', url: VIP_GROUP_URL }],
-                  ],
-                },
-              })
-              .catch(console.error);
+              bot
+                .sendMessage(
+                  telegramId,
+                  '🚀 Click below to join the VIP group:',
+                  {
+                    reply_markup: {
+                      inline_keyboard: [
+                        [{ text: 'Join VIP Group', url: VIP_GROUP_URL }],
+                      ],
+                    },
+                  }
+                )
+                .catch(console.error);
+            }
 
-            console.log(`🎉 Activated user ${user.id} for ref ${reference}`);
+            console.log(`🎉 Updated user ${user.id} for ref ${reference}`);
           } else {
-            console.warn(
-              '⚠️ No user match for paystack event. ref=',
-              reference,
-              'email=',
-              email
-            );
+            // 🆕 New user
+            const newUser = {
+              id: telegramId || `paystack_${Date.now()}`,
+              username,
+              first_name: firstName,
+              last_name: '',
+              email,
+              status: 'true',
+              payment_reference: reference,
+              subscription_start: new Date().toISOString(),
+            };
+
+            users.push(newUser);
+            writeUsersToCSV(users);
+
+            console.log(`🆕 Created new user from Paystack: ${email}`);
+
+            if (telegramId) {
+              bot
+                .sendMessage(
+                  telegramId,
+                  `✅ Payment confirmed!\n\nWelcome to CertiPred VIP 🎉`
+                )
+                .catch(console.error);
+
+              bot
+                .sendMessage(
+                  telegramId,
+                  '🚀 Click below to join the VIP group:',
+                  {
+                    reply_markup: {
+                      inline_keyboard: [
+                        [{ text: 'Join VIP Group', url: VIP_GROUP_URL }],
+                      ],
+                    },
+                  }
+                )
+                .catch(console.error);
+            }
           }
         })
         .catch((err) =>
@@ -162,6 +211,55 @@ function readUsersFromCSV() {
       .on('end', () => resolve(users))
       .on('error', reject);
   });
+}
+
+const CSV_FIELDS = [
+  'id',
+  'username',
+  'first_name',
+  'last_name',
+  'email',
+  'status',
+  'payment_reference',
+  'subscription_start',
+];
+
+function readUsersFromCSV() {
+  return new Promise((resolve, reject) => {
+    const users = [];
+    fs.createReadStream(csvFilePath)
+      .pipe(csv())
+      .on('data', (row) => {
+        // Normalize each row to ensure all fields exist
+        const normalized = {};
+        CSV_FIELDS.forEach((field) => {
+          normalized[field] = row[field] || '';
+        });
+        users.push(normalized);
+      })
+      .on('end', () => resolve(users))
+      .on('error', reject);
+  });
+}
+
+function writeUsersToCSV(users) {
+  // normalize before writing
+  const normalizedUsers = users.map((u) => {
+    const normalized = {};
+    CSV_FIELDS.forEach((field) => {
+      normalized[field] = u[field] || '';
+    });
+    return normalized;
+  });
+
+  lockfile
+    .lock(csvFilePath, { retries: 3 })
+    .then((release) => {
+      const csvData = parse(normalizedUsers, { fields: CSV_FIELDS });
+      fs.writeFileSync(csvFilePath, csvData + '\n');
+      release();
+    })
+    .catch((err) => console.error('Error writing users CSV:', err));
 }
 
 function writeUsersToCSV(users) {
@@ -329,7 +427,17 @@ bot.on('callback_query', async (callbackQuery) => {
     try {
       const response = await axios.post(
         'https://api.paystack.co/transaction/initialize',
-        { email: user.email, amount, currency, reference: paymentReference },
+        {
+          email: user.email,
+          amount,
+          currency,
+          reference: paymentReference,
+          metadata: {
+            telegram_id: message.chat.id, // 👈 store Telegram user ID here
+            first_name: message.from.first_name, // optional extra
+            username: message.from.username, // optional extra
+          },
+        },
         {
           headers: {
             Authorization: `Bearer ${paystackSecretKey}`,
@@ -339,28 +447,24 @@ bot.on('callback_query', async (callbackQuery) => {
       );
 
       const paymentUrl = response.data.data.authorization_url;
-      bot
-        .sendMessage(
-          message.chat.id,
-          `💳 The price is ₦${amount / 100}. Click below to pay:`,
-          {
-            reply_markup: {
-              inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
-            },
-          }
-        )
-        .catch(console.error);
+      await bot.sendMessage(
+        message.chat.id,
+        `💳 The price is ₦${amount / 100}. Click below to pay:`,
+        {
+          reply_markup: {
+            inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
+          },
+        }
+      );
     } catch (error) {
       console.error(
         'Payment initialization error (Nigeria):',
         error.response?.data || error.message
       );
-      bot
-        .sendMessage(
-          message.chat.id,
-          '❌ Payment initialization failed. Please try again later.'
-        )
-        .catch(console.error);
+      await bot.sendMessage(
+        message.chat.id,
+        '❌ Payment initialization failed. Please try again later.'
+      );
     }
   }
 });
