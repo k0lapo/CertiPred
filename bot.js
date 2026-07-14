@@ -4,8 +4,8 @@ const axios = require('axios');
 const schedule = require('node-schedule');
 require('dotenv').config();
 const express = require('express');
-const path = require('path');
 const bodyParser = require('body-parser');
+const PocketBase = require('pocketbase/cjs');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const url = process.env.RENDER_APP_URL; // e.g. https://your-app.onrender.com
@@ -13,21 +13,31 @@ const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
 const tronGridApiKey = process.env.TRONGRID_API_KEY;
 const VIP_GROUP_CHAT_ID = process.env.VIP_GROUP_CHAT_ID; // numeric chat id for programmatic actions
 
-const { createClient } = require('@supabase/supabase-js');
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const pocketBaseUrl = process.env.POCKETBASE_URL;
+const pocketBaseAdminEmail = process.env.POCKETBASE_ADMIN_EMAIL;
+const pocketBaseAdminPassword = process.env.POCKETBASE_ADMIN_PASSWORD;
 
 const VIP_GROUP_URL = 'https://t.me/+2AsqyFrMUgUwYjM0';
 const GHANA_PRICE = 5000 * 100; // GHS 5,000 (Paystack expects minor unit)
-const NIGERIA_PRICE = 7000 * 100; // ₦75,000 -> 75,000 * 100 (naira)
+const NIGERIA_PRICE =10 * 100; // ₦75,000 -> 75,000 * 100 (naira)
 const CURRENCY_MAP = { nigeria: 'NGN', ghana: 'GHS' };
+const SUBSCRIPTION_DAYS = 1;
+const REMINDER_DAYS_BEFORE_EXPIRY = 3;
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN in .env');
+if (!pocketBaseUrl) throw new Error('Missing POCKETBASE_URL in .env');
+if (!pocketBaseAdminEmail)
+  throw new Error('Missing POCKETBASE_ADMIN_EMAIL in .env');
+if (!pocketBaseAdminPassword)
+  throw new Error('Missing POCKETBASE_ADMIN_PASSWORD in .env');
 if (!url)
   console.warn(
     'RENDER_APP_URL missing in .env — webhook may not set correctly'
   );
+
+const pb = new PocketBase(pocketBaseUrl);
+pb.autoCancellation(false);
 
 const bot = new TelegramBot(token, { webHook: true });
 if (url) {
@@ -49,7 +59,7 @@ app.post('/webhook', (req, res) => {
   res.sendStatus(200);
 });
 
-app.post('/paystack/webhook', (req, res) => {
+app.post('/paystack/webhook', async (req, res) => {
   res.sendStatus(200);
 
   try {
@@ -75,165 +85,194 @@ app.post('/paystack/webhook', (req, res) => {
     if (event === 'charge.success') {
       const email = (data.customer?.email || '').toLowerCase();
       const reference = data.reference;
-      const telegramId = data.metadata?.telegram_id;
+      const telegramId = data.metadata?.telegram_id
+        ? String(data.metadata.telegram_id)
+        : '';
       const firstName = data.metadata?.first_name || '';
       const username = data.metadata?.username || '';
 
-      getUsersFromDB()
-        .then(async (users) => {
-          const user = users.find(
-            (u) =>
-              u.payment_reference === reference ||
-              (telegramId && u.id == telegramId) ||
-              (email && (u.email || '').toLowerCase() === email)
-          );
+      const user = await findUserForPayment(reference, telegramId, email);
+      const userPayload = {
+        ...(user || {}),
+        telegram_id: telegramId || getTelegramId(user) || `paystack_${Date.now()}`,
+        username,
+        first_name: firstName,
+        last_name: user?.last_name || '',
+        email,
+      };
 
-          if (user) {
-            const updatedUser = {
-              ...user,
-              status: true,
-              subscription_start: new Date().toISOString(),
-              payment_reference: reference || user.payment_reference,
-              updated_at: new Date().toISOString(),
-            };
+      const activatedUser = user
+        ? await activateSubscription(userPayload, reference)
+        : await createActivatedUser(userPayload, reference);
 
-            if (telegramId) updatedUser.id = telegramId;
-            if (firstName) updatedUser.first_name = firstName;
-            if (username) updatedUser.username = username;
-            if (email) updatedUser.email = email;
-
-            await updateUserInDB(updatedUser);
-
-            if (telegramId) {
-              bot
-                .sendMessage(
-                  telegramId,
-                  `✅ Payment confirmed!\n\nWelcome back to CertiPred VIP 🎉`
-                )
-                .catch(console.error);
-
-              bot
-                .sendMessage(
-                  telegramId,
-                  '🚀 Click below to join the VIP group:',
-                  {
-                    reply_markup: {
-                      inline_keyboard: [
-                        [{ text: 'Join VIP Group', url: VIP_GROUP_URL }],
-                      ],
-                    },
-                  }
-                )
-                .catch(console.error);
-            }
-
-            console.log(`🎉 Updated user ${user.id} for ref ${reference}`);
-          } else {
-            const newUser = {
-              id: telegramId || `paystack_${Date.now()}`,
-              username,
-              first_name: firstName,
-              last_name: '',
-              email,
-              status: true,
-              payment_reference: reference,
-              subscription_start: new Date().toISOString(),
-            };
-
-            await createUserInDB(newUser);
-
-            console.log(`🆕 Created new user from Paystack: ${email}`);
-
-            if (telegramId) {
-              bot
-                .sendMessage(
-                  telegramId,
-                  `✅ Payment confirmed!\n\nWelcome to CertiPred VIP 🎉`
-                )
-                .catch(console.error);
-
-              bot
-                .sendMessage(
-                  telegramId,
-                  '🚀 Click below to join the VIP group:',
-                  {
-                    reply_markup: {
-                      inline_keyboard: [
-                        [{ text: 'Join VIP Group', url: VIP_GROUP_URL }],
-                      ],
-                    },
-                  }
-                )
-                .catch(console.error);
-            }
-          }
-        })
-        .catch((err) =>
-          console.error('Error reading users from DB on webhook:', err)
+      const activatedTelegramId = getTelegramId(activatedUser);
+      if (activatedTelegramId) {
+        await sendVipInvite(
+          activatedTelegramId,
+          `✅ Payment confirmed!\n\nWelcome to CertiPred VIP 🎉`
         );
+      }
+
+      console.log(`🎉 Activated user ${getTelegramId(activatedUser)} for ref ${reference}`);
     }
   } catch (err) {
     console.error('❌ Exception handling Paystack webhook:', err);
   }
 });
 
+function getTelegramId(user) {
+  return user?.telegram_id ? String(user.telegram_id) : '';
+}
+
+function addDays(date, days) {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
+function getSubscriptionExpiry(user) {
+  if (user?.subscription_expires_at) {
+    return new Date(user.subscription_expires_at);
+  }
+
+  if (!user?.subscription_start) return null;
+  return addDays(new Date(user.subscription_start), SUBSCRIPTION_DAYS);
+}
+
+function buildSubscriptionFields(paymentReference) {
+  const now = new Date();
+  const expiresAt = addDays(now, SUBSCRIPTION_DAYS);
+
+  return {
+    status: true,
+    payment_reference: paymentReference,
+    payment_confirmed_at: now.toISOString(),
+    subscription_start: now.toISOString(),
+    subscription_expires_at: expiresAt.toISOString(),
+    last_reminder_sent_at: '',
+  };
+}
+
+function toPocketBaseUserPayload(user) {
+  return {
+    telegram_id: getTelegramId(user),
+    username: user.username || '',
+    first_name: user.first_name || '',
+    last_name: user.last_name || '',
+    email: user.email || '',
+    status: user.status === true,
+    payment_reference: user.payment_reference || '',
+    payment_confirmed_at: user.payment_confirmed_at || '',
+    subscription_start: user.subscription_start || '',
+    subscription_expires_at: user.subscription_expires_at || '',
+    joined_group_at: user.joined_group_at || '',
+    left_group_at: user.left_group_at || '',
+    is_in_vip_group: user.is_in_vip_group === true,
+    last_reminder_sent_at: user.last_reminder_sent_at || '',
+  };
+}
+
+async function ensurePocketBaseAuth() {
+  if (pb.authStore.isValid) return;
+
+  await pb
+    .collection('_superusers')
+    .authWithPassword(pocketBaseAdminEmail, pocketBaseAdminPassword);
+}
+
 async function getUsersFromDB() {
   try {
-    const { data, error } = await supabase.from('users').select('*');
-
-    if (error) throw error;
-    return data || [];
+    await ensurePocketBaseAuth();
+    return await pb.collection('users').getFullList({
+      sort: '-created',
+    });
   } catch (error) {
-    console.error('Error fetching users from DB:', error);
+    console.error('Error fetching users from PocketBase:', error);
     return [];
   }
 }
 
 async function createUserInDB(user) {
   try {
-    const { data, error } = await supabase
-      .from('users')
-      .insert([user])
-      .select();
-
-    if (error) throw error;
-    return data[0];
+    await ensurePocketBaseAuth();
+    return await pb.collection('users').create(toPocketBaseUserPayload(user));
   } catch (error) {
-    console.error('Error creating user in DB:', error);
+    console.error('Error creating user in PocketBase:', error);
     throw error;
   }
 }
 
 async function updateUserInDB(user) {
   try {
-    const { data, error } = await supabase
-      .from('users')
-      .update(user)
-      .eq('id', user.id)
-      .select();
+    await ensurePocketBaseAuth();
+    const recordId = user.id || (await getUserFromDB(getTelegramId(user)))?.id;
+    if (!recordId) throw new Error('Cannot update user without PocketBase id');
 
-    if (error) throw error;
-    return data[0];
+    return await pb
+      .collection('users')
+      .update(recordId, toPocketBaseUserPayload(user));
   } catch (error) {
-    console.error('Error updating user in DB:', error);
+    console.error('Error updating user in PocketBase:', error);
     throw error;
   }
 }
 
-async function getUserFromDB(userId) {
+async function getUserFromDB(telegramId) {
   try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .single();
-
-    if (error && error.code !== 'PGRST116') throw error; // PGRST116 is "not found"
-    return data;
+    await ensurePocketBaseAuth();
+    return await pb
+      .collection('users')
+      .getFirstListItem(
+        pb.filter('telegram_id = {:telegramId}', {
+          telegramId: String(telegramId),
+        })
+      );
   } catch (error) {
-    console.error('Error fetching user from DB:', error);
+    if (error.status === 404) return null;
+    console.error('Error fetching user from PocketBase:', error);
     return null;
   }
+}
+
+async function findUserForPayment(reference, telegramId, email) {
+  if (telegramId) {
+    const user = await getUserFromDB(String(telegramId));
+    if (user) return user;
+  }
+
+  const users = await getUsersFromDB();
+  return (
+    users.find(
+      (user) =>
+        user.payment_reference === reference ||
+        (email && (user.email || '').toLowerCase() === email)
+    ) || null
+  );
+}
+
+async function createActivatedUser(user, paymentReference) {
+  return createUserInDB({
+    ...user,
+    ...buildSubscriptionFields(paymentReference),
+  });
+}
+
+async function activateSubscription(user, paymentReference) {
+  return updateUserInDB({
+    ...user,
+    ...buildSubscriptionFields(paymentReference || user.payment_reference),
+  });
+}
+
+async function sendVipInvite(chatId, message) {
+  await bot.sendMessage(chatId, message).catch(console.error);
+  return bot
+    .sendMessage(chatId, '🚀 Click below to join the VIP group:', {
+      reply_markup: {
+        inline_keyboard: [[{ text: 'Join VIP Group', url: VIP_GROUP_URL }]],
+      },
+    })
+    .catch(console.error);
 }
 
 async function manageSubscriptionExpirations() {
@@ -241,39 +280,52 @@ async function manageSubscriptionExpirations() {
   const users = await getUsersFromDB();
 
   for (const user of users) {
-    if (!user.subscription_start || user.status !== true) continue;
+    if (user.status !== true) continue;
 
-    const subscriptionStart = new Date(user.subscription_start);
-    const daysDiff = Math.floor(
-      (currentDate - subscriptionStart) / (1000 * 60 * 60 * 24)
-    );
+    const telegramId = getTelegramId(user);
+    const expiry = getSubscriptionExpiry(user);
+    if (!telegramId || !expiry) continue;
 
-    if (daysDiff === 25) {
+    const daysLeft = Math.ceil((expiry - currentDate) / MS_PER_DAY);
+    const reminderAlreadySent =
+      user.last_reminder_sent_at &&
+      new Date(user.last_reminder_sent_at) >= new Date(user.subscription_start);
+
+    if (
+      daysLeft > 0 &&
+      daysLeft <= REMINDER_DAYS_BEFORE_EXPIRY &&
+      !reminderAlreadySent
+    ) {
       bot
-        .sendMessage(user.id, `⏳ Your VIP subscription expires in 5 days.`)
+        .sendMessage(
+          telegramId,
+          `⏳ Your VIP subscription expires in ${daysLeft} day(s). Please renew to keep access.`
+        )
         .catch(console.error);
-    } else if (daysDiff === 29) {
-      bot
-        .sendMessage(user.id, `⚠️ Your VIP subscription expires tomorrow.`)
-        .catch(console.error);
-    } else if (daysDiff >= 30) {
+
+      await updateUserInDB({
+        ...user,
+        last_reminder_sent_at: currentDate.toISOString(),
+      });
+    } else if (currentDate >= expiry) {
       try {
-        await bot.banChatMember(VIP_GROUP_CHAT_ID, user.id);
-        await bot.unbanChatMember(VIP_GROUP_CHAT_ID, user.id);
+        await bot.banChatMember(VIP_GROUP_CHAT_ID, telegramId);
+        await bot.unbanChatMember(VIP_GROUP_CHAT_ID, telegramId);
         bot
           .sendMessage(
-            user.id,
-            `🚫 Subscription expired. You have been removed.`
+            telegramId,
+            `🚫 Your VIP subscription has expired. You have been removed from the VIP group. Renew anytime to join again.`
           )
           .catch(console.error);
 
         await updateUserInDB({
           ...user,
           status: false,
-          updated_at: new Date().toISOString(),
+          is_in_vip_group: false,
+          left_group_at: currentDate.toISOString(),
         });
       } catch (err) {
-        console.error(`Error removing user ${user.id}:`, err.message);
+        console.error(`Error removing user ${telegramId}:`, err.message);
       }
     }
   }
@@ -285,13 +337,13 @@ bot.onText(/\/status/, async (msg) => {
     return bot.sendMessage(msg.chat.id, '❌ Not an active VIP member.');
 
   const expiry = new Date(user.subscription_start);
-  expiry.setDate(expiry.getDate() + 30);
-  const daysLeft = Math.ceil((expiry - new Date()) / (1000 * 60 * 60 * 24));
+  const subscriptionExpiry = getSubscriptionExpiry(user) || expiry;
+  const daysLeft = Math.ceil((subscriptionExpiry - new Date()) / MS_PER_DAY);
 
   bot
     .sendMessage(
       msg.chat.id,
-      `✅ VIP active\nExpires in: ${daysLeft} day(s)\nDate: ${expiry.toDateString()}`
+      `✅ VIP active\nExpires in: ${daysLeft} day(s)\nDate: ${subscriptionExpiry.toDateString()}`
     )
     .catch(console.error);
 });
@@ -335,7 +387,6 @@ bot.on('callback_query', async (callbackQuery) => {
     await updateUserInDB({
       ...user,
       payment_reference: paymentReference,
-      updated_at: new Date().toISOString(),
     });
 
     try {
@@ -392,7 +443,6 @@ bot.on('callback_query', async (callbackQuery) => {
     await updateUserInDB({
       ...user,
       payment_reference: paymentReference,
-      updated_at: new Date().toISOString(),
     });
 
     try {
@@ -441,6 +491,8 @@ bot.on('callback_query', async (callbackQuery) => {
         )
         .catch(console.error);
     }
+  } else if (data === 'crypto') {
+    sendCryptoInstructions(message.chat.id);
   }
 });
 
@@ -474,24 +526,16 @@ bot.onText(/\/verify (.+)/, async (msg, match) => {
         }\nEmail: ${data.customer.email}\nRef: ${data.reference}`
       );
 
-      const users = await getUsersFromDB();
-      const user = users.find(
-        (u) =>
-          u.payment_reference === reference ||
-          (u.email || '').toLowerCase() ===
-            (data.customer.email || '').toLowerCase()
-      );
+      const user =
+        (await getUserFromDB(String(chatId))) ||
+        (await findUserForPayment(
+          reference,
+          String(chatId),
+          (data.customer.email || '').toLowerCase()
+        ));
 
       if (user) {
-        const updatedUser = {
-          ...user,
-          status: true,
-          subscription_start: new Date().toISOString(),
-          payment_reference: reference,
-          updated_at: new Date().toISOString(),
-        };
-
-        await updateUserInDB(updatedUser);
+        await activateSubscription(user, reference);
 
         bot
           .sendMessage(
@@ -499,7 +543,16 @@ bot.onText(/\/verify (.+)/, async (msg, match) => {
             "🎉 You are now activated! Here's your VIP join link:"
           )
           .catch(console.error);
-        bot.sendMessage(chatId, VIP_GROUP_URL).catch(console.error);
+        bot
+          .sendMessage(chatId, VIP_GROUP_URL)
+          .catch(console.error);
+      } else {
+        bot
+          .sendMessage(
+            chatId,
+            '⚠️ Payment was successful, but no registered user was found. Please use /start first.'
+          )
+          .catch(console.error);
       }
     } else {
       bot.sendMessage(
@@ -516,17 +569,20 @@ bot.onText(/\/verify (.+)/, async (msg, match) => {
   }
 });
 
-bot.onText(/\/crypto/, (msg) => {
-  const chatId = msg.chat.id;
+function sendCryptoInstructions(chatId) {
   const paymentAmount = 5;
   const yourTRC20Wallet = 'TMuVT2cUkxRUxatHhUYKcBV7c5vDarm1PE';
-  bot
+  return bot
     .sendMessage(
       chatId,
       `🔐 *Crypto Payment - USDT (TRC-20)*\n\nPlease send *${paymentAmount} USDT* to:\n\`${yourTRC20Wallet}\`\n\nReply with the *TXID* to verify.`,
       { parse_mode: 'Markdown' }
     )
     .catch(console.error);
+}
+
+bot.onText(/\/crypto/, (msg) => {
+  sendCryptoInstructions(msg.chat.id);
 });
 
 bot.onText(/^[a-fA-F0-9]{64}$/, async (msg) => {
@@ -571,15 +627,7 @@ bot.onText(/^[a-fA-F0-9]{64}$/, async (msg) => {
       recipientAddressBase58 === expectedWallet &&
       amount >= 5
     ) {
-      const updatedUser = {
-        ...user,
-        status: true,
-        subscription_start: new Date().toISOString(),
-        payment_reference: `USDT-${txid}`,
-        updated_at: new Date().toISOString(),
-      };
-
-      await updateUserInDB(updatedUser);
+      await activateSubscription(user, `USDT-${txid}`);
 
       bot
         .sendMessage(chatId, `✅ Payment confirmed! Welcome to VIP.`)
@@ -622,7 +670,7 @@ bot.onText(/\/start/, (msg) => {
     ) {
       const email = reply.text.trim();
       const newUser = {
-        id: String(reply.from.id),
+        telegram_id: String(reply.from.id),
         username: reply.from.username || '',
         first_name: reply.from.first_name || '',
         last_name: reply.from.last_name || '',
@@ -630,10 +678,16 @@ bot.onText(/\/start/, (msg) => {
         status: false,
         payment_reference: '',
         subscription_start: null,
+        subscription_expires_at: null,
+        payment_confirmed_at: null,
+        joined_group_at: null,
+        left_group_at: null,
+        is_in_vip_group: false,
+        last_reminder_sent_at: null,
       };
 
       try {
-        const existingUser = await getUserFromDB(newUser.id);
+        const existingUser = await getUserFromDB(newUser.telegram_id);
 
         if (!existingUser) {
           await createUserInDB(newUser);
@@ -657,6 +711,45 @@ bot.onText(/\/start/, (msg) => {
   };
 
   bot.on('message', collector);
+});
+
+bot.on('message', async (msg) => {
+  if (String(msg.chat.id) !== String(VIP_GROUP_CHAT_ID)) return;
+
+  if (msg.new_chat_members?.length) {
+    for (const member of msg.new_chat_members) {
+      const user = await getUserFromDB(String(member.id));
+      const expiry = getSubscriptionExpiry(user);
+      const hasActiveSubscription =
+        user?.status === true && expiry && new Date() < expiry;
+
+      if (!hasActiveSubscription) {
+        await bot.banChatMember(VIP_GROUP_CHAT_ID, member.id).catch(console.error);
+        await bot
+          .unbanChatMember(VIP_GROUP_CHAT_ID, member.id)
+          .catch(console.error);
+        continue;
+      }
+
+      await updateUserInDB({
+        ...user,
+        joined_group_at: user.joined_group_at || new Date().toISOString(),
+        left_group_at: '',
+        is_in_vip_group: true,
+      });
+    }
+  }
+
+  if (msg.left_chat_member) {
+    const user = await getUserFromDB(String(msg.left_chat_member.id));
+    if (!user) return;
+
+    await updateUserInDB({
+      ...user,
+      is_in_vip_group: false,
+      left_group_at: new Date().toISOString(),
+    });
+  }
 });
 
 bot.onText(/\/subscribe/, (msg) => {

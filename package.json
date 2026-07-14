@@ -11,7 +11,6 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@supabase/supabase-js": "^2.57.4",
     "axios": "^1.7.2",
     "body-parser": "^1.20.2",
     "bs58check": "^4.0.0",
@@ -21,6 +20,7 @@
     "json2csv": "^6.0.0-alpha.2",
     "node-schedule": "^2.1.1",
     "node-telegram-bot-api": "^0.66.0",
+    "pocketbase": "^0.27.0",
     "proper-lockfile": "^4.1.2",
     "retry": "^0.13.1",
     "stripe": "^16.6.0",
