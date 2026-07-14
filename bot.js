@@ -183,7 +183,7 @@ async function ensurePocketBaseAuth() {
 async function getUsersFromDB() {
   try {
     await ensurePocketBaseAuth();
-    return await pb.collection('users').getFullList({
+    return await pb.collection('certipredusers').getFullList({
       sort: '-created',
     });
   } catch (error) {
@@ -195,7 +195,7 @@ async function getUsersFromDB() {
 async function createUserInDB(user) {
   try {
     await ensurePocketBaseAuth();
-    return await pb.collection('users').create(toPocketBaseUserPayload(user));
+    return await pb.collection('certipredusers').create(toPocketBaseUserPayload(user));
   } catch (error) {
     console.error('Error creating user in PocketBase:', error);
     throw error;
