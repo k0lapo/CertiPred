@@ -209,7 +209,7 @@ async function updateUserInDB(user) {
     if (!recordId) throw new Error('Cannot update user without PocketBase id');
 
     return await pb
-      .collection('users')
+      .collection('certipredusers')
       .update(recordId, toPocketBaseUserPayload(user));
   } catch (error) {
     console.error('Error updating user in PocketBase:', error);
@@ -221,7 +221,7 @@ async function getUserFromDB(telegramId) {
   try {
     await ensurePocketBaseAuth();
     return await pb
-      .collection('users')
+      .collection('certipredusers')
       .getFirstListItem(
         pb.filter('telegram_id = {:telegramId}', {
           telegramId: String(telegramId),
