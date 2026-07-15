@@ -6,6 +6,7 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const admin = require('firebase-admin');
+const { getFirestore } = require('firebase-admin/firestore');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const url = process.env.RENDER_APP_URL; // e.g. https://your-app.onrender.com
@@ -61,13 +62,13 @@ function parseFirebaseServiceAccount(value) {
   }
 }
 
-admin.initializeApp({
+const firebaseApp = admin.initializeApp({
   credential: admin.cert(
     parseFirebaseServiceAccount(firebaseServiceAccount)
   ),
 });
 
-const db = admin.firestore();
+const db = getFirestore(firebaseApp);
 const usersCollection = db.collection(firebaseCollection);
 
 const bot = new TelegramBot(token, { webHook: true });
