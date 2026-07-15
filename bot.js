@@ -25,6 +25,8 @@ const SUBSCRIPTION_DAYS = 1;
 const REMINDER_DAYS_BEFORE_EXPIRY = 3;
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
+let pocketBaseAuthPromise = null;
+
 if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN in .env');
 if (!pocketBaseUrl) throw new Error('Missing POCKETBASE_URL in .env');
 if (!pocketBaseAdminEmail)
@@ -172,12 +174,18 @@ function toPocketBaseUserPayload(user) {
   };
 }
 
+
 async function ensurePocketBaseAuth() {
   if (pb.authStore.isValid) return;
-
-  await pb
-    .collection('_superusers')
-    .authWithPassword(pocketBaseAdminEmail, pocketBaseAdminPassword);
+  if (!pocketBaseAuthPromise) {
+    pocketBaseAuthPromise = pb
+      .collection('_superusers')
+      .authWithPassword(pocketBaseAdminEmail, pocketBaseAdminPassword)
+      .finally(() => {
+        pocketBaseAuthPromise = null;
+      });
+  }
+  await pocketBaseAuthPromise;
 }
 
 async function getUsersFromDB() {
