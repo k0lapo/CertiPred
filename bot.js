@@ -38,11 +38,27 @@ if (!url)
   );
 
 function parseFirebaseServiceAccount(value) {
-  const json = value.trim().startsWith('{')
-    ? value
-    : Buffer.from(value, 'base64').toString('utf8');
+  const trimmed = value.trim();
+  const json = trimmed.startsWith('{')
+    ? trimmed
+    : Buffer.from(trimmed, 'base64').toString('utf8');
 
-  return JSON.parse(json);
+  try {
+    const serviceAccount = JSON.parse(json);
+
+    if (serviceAccount.private_key) {
+      serviceAccount.private_key = serviceAccount.private_key.replace(
+        /\\n/g,
+        '\n'
+      );
+    }
+
+    return serviceAccount;
+  } catch (error) {
+    throw new Error(
+      'Invalid Firebase service account. Set FIREBASE_SERVICE_ACCOUNT to the raw JSON, or FIREBASE_SERVICE_ACCOUNT_BASE64 to a base64-encoded Firebase service account JSON file.'
+    );
+  }
 }
 
 admin.initializeApp({
