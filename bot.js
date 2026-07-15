@@ -5,7 +5,7 @@ const schedule = require('node-schedule');
 require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
-const PocketBase = require('pocketbase/cjs');
+const admin = require('firebase-admin');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const url = process.env.RENDER_APP_URL; // e.g. https://your-app.onrender.com
@@ -13,9 +13,11 @@ const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
 const tronGridApiKey = process.env.TRONGRID_API_KEY;
 const VIP_GROUP_CHAT_ID = process.env.VIP_GROUP_CHAT_ID; // numeric chat id for programmatic actions
 
-const pocketBaseUrl = process.env.POCKETBASE_URL;
-const pocketBaseAdminEmail = process.env.POCKETBASE_ADMIN_EMAIL;
-const pocketBaseAdminPassword = process.env.POCKETBASE_ADMIN_PASSWORD;
+const firebaseServiceAccount =
+  process.env.FIREBASE_SERVICE_ACCOUNT ||
+  process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+const firebaseCollection =
+  process.env.FIREBASE_COLLECTION || 'certipredusers';
 
 const VIP_GROUP_URL = 'https://t.me/+2AsqyFrMUgUwYjM0';
 const GHANA_PRICE = 5000 * 100; // GHS 5,000 (Paystack expects minor unit)
@@ -25,21 +27,32 @@ const SUBSCRIPTION_DAYS = 1;
 const REMINDER_DAYS_BEFORE_EXPIRY = 3;
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
-let pocketBaseAuthPromise = null;
-
 if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN in .env');
-if (!pocketBaseUrl) throw new Error('Missing POCKETBASE_URL in .env');
-if (!pocketBaseAdminEmail)
-  throw new Error('Missing POCKETBASE_ADMIN_EMAIL in .env');
-if (!pocketBaseAdminPassword)
-  throw new Error('Missing POCKETBASE_ADMIN_PASSWORD in .env');
+if (!firebaseServiceAccount)
+  throw new Error(
+    'Missing FIREBASE_SERVICE_ACCOUNT or FIREBASE_SERVICE_ACCOUNT_BASE64 in .env'
+  );
 if (!url)
   console.warn(
     'RENDER_APP_URL missing in .env — webhook may not set correctly'
   );
 
-const pb = new PocketBase(pocketBaseUrl);
-pb.autoCancellation(false);
+function parseFirebaseServiceAccount(value) {
+  const json = value.trim().startsWith('{')
+    ? value
+    : Buffer.from(value, 'base64').toString('utf8');
+
+  return JSON.parse(json);
+}
+
+admin.initializeApp({
+  credential: admin.credential.cert(
+    parseFirebaseServiceAccount(firebaseServiceAccount)
+  ),
+});
+
+const db = admin.firestore();
+const usersCollection = db.collection(firebaseCollection);
 
 const bot = new TelegramBot(token, { webHook: true });
 if (url) {
@@ -155,7 +168,7 @@ function buildSubscriptionFields(paymentReference) {
   };
 }
 
-function toPocketBaseUserPayload(user) {
+function toFirebaseUserPayload(user) {
   return {
     telegram_id: getTelegramId(user),
     username: user.username || '',
@@ -174,70 +187,72 @@ function toPocketBaseUserPayload(user) {
   };
 }
 
-
-async function ensurePocketBaseAuth() {
-  if (pb.authStore.isValid) return;
-  if (!pocketBaseAuthPromise) {
-    pocketBaseAuthPromise = pb
-      .collection('_superusers')
-      .authWithPassword(pocketBaseAdminEmail, pocketBaseAdminPassword)
-      .finally(() => {
-        pocketBaseAuthPromise = null;
-      });
-  }
-  await pocketBaseAuthPromise;
-}
-
 async function getUsersFromDB() {
   try {
-    await ensurePocketBaseAuth();
-    return await pb.collection('certipredusers').getFullList({
-      sort: '-created',
-    });
+    const snapshot = await usersCollection.orderBy('created_at', 'desc').get();
+    return snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
   } catch (error) {
-    console.error('Error fetching users from PocketBase:', error);
+    console.error('Error fetching users from Firebase:', error);
     return [];
   }
 }
 
 async function createUserInDB(user) {
   try {
-    await ensurePocketBaseAuth();
-    return await pb.collection('certipredusers').create(toPocketBaseUserPayload(user));
+    const telegramId = getTelegramId(user);
+    if (!telegramId) throw new Error('Cannot create user without telegram_id');
+
+    const payload = {
+      ...toFirebaseUserPayload(user),
+      created_at: user.created_at || new Date().toISOString(),
+    };
+
+    await usersCollection.doc(telegramId).set(payload, { merge: true });
+    return {
+      id: telegramId,
+      ...payload,
+    };
   } catch (error) {
-    console.error('Error creating user in PocketBase:', error);
+    console.error('Error creating user in Firebase:', error);
     throw error;
   }
 }
 
 async function updateUserInDB(user) {
   try {
-    await ensurePocketBaseAuth();
-    const recordId = user.id || (await getUserFromDB(getTelegramId(user)))?.id;
-    if (!recordId) throw new Error('Cannot update user without PocketBase id');
+    const telegramId = getTelegramId(user) || user.id;
+    if (!telegramId) throw new Error('Cannot update user without telegram_id');
 
-    return await pb
-      .collection('certipredusers')
-      .update(recordId, toPocketBaseUserPayload(user));
+    const payload = {
+      ...toFirebaseUserPayload(user),
+      updated_at: new Date().toISOString(),
+    };
+
+    await usersCollection.doc(String(telegramId)).set(payload, { merge: true });
+    return {
+      id: String(telegramId),
+      ...payload,
+    };
   } catch (error) {
-    console.error('Error updating user in PocketBase:', error);
+    console.error('Error updating user in Firebase:', error);
     throw error;
   }
 }
 
 async function getUserFromDB(telegramId) {
   try {
-    await ensurePocketBaseAuth();
-    return await pb
-      .collection('certipredusers')
-      .getFirstListItem(
-        pb.filter('telegram_id = {:telegramId}', {
-          telegramId: String(telegramId),
-        })
-      );
+    const doc = await usersCollection.doc(String(telegramId)).get();
+    if (!doc.exists) return null;
+
+    return {
+      id: doc.id,
+      ...doc.data(),
+    };
   } catch (error) {
-    if (error.status === 404) return null;
-    console.error('Error fetching user from PocketBase:', error);
+    console.error('Error fetching user from Firebase:', error);
     return null;
   }
 }
