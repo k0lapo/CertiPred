@@ -81,7 +81,7 @@ const app = express();
 app.use(
   bodyParser.json({
     verify: (req, res, buf) => {
-      req.rawBody = buf.toString();
+      req.rawBody = buf;
     },
   })
 );
@@ -92,13 +92,11 @@ app.post('/webhook', (req, res) => {
 });
 
 app.post('/paystack/webhook', async (req, res) => {
-  res.sendStatus(200);
-
   try {
     const signature = req.headers['x-paystack-signature'];
     if (!signature) {
       console.warn('⚠️ No x-paystack-signature header present');
-      return;
+      return res.sendStatus(400);
     }
 
     const hash = crypto
@@ -107,8 +105,10 @@ app.post('/paystack/webhook', async (req, res) => {
       .digest('hex');
 
     if (hash !== signature) {
-      console.warn('❌ Paystack signature mismatch.');
-      return;
+      console.warn('❌ Paystack signature mismatch.', {
+        reference: req.body?.data?.reference,
+      });
+      return res.sendStatus(401);
     }
 
     const { event, data } = req.body;
@@ -126,12 +126,21 @@ app.post('/paystack/webhook', async (req, res) => {
       const user = await findUserForPayment(reference, telegramId, email);
       const userPayload = {
         ...(user || {}),
-        telegram_id: telegramId || getTelegramId(user) || `paystack_${Date.now()}`,
+        telegram_id: telegramId || getTelegramId(user),
         username,
         first_name: firstName,
         last_name: user?.last_name || '',
         email,
       };
+
+      if (!getTelegramId(userPayload)) {
+        console.error('❌ Paystack webhook could not resolve Telegram user', {
+          reference,
+          email,
+          metadata: data.metadata,
+        });
+        return res.sendStatus(422);
+      }
 
       const activatedUser = user
         ? await activateSubscription(userPayload, reference)
@@ -147,8 +156,11 @@ app.post('/paystack/webhook', async (req, res) => {
 
       console.log(`🎉 Activated user ${getTelegramId(activatedUser)} for ref ${reference}`);
     }
+
+    return res.sendStatus(200);
   } catch (err) {
     console.error('❌ Exception handling Paystack webhook:', err);
+    return res.sendStatus(500);
   }
 });
 
@@ -754,7 +766,15 @@ bot.onText(/\/start/, (msg) => {
 });
 
 bot.on('message', async (msg) => {
-  if (String(msg.chat.id) !== String(VIP_GROUP_CHAT_ID)) return;
+  if (String(msg.chat.id) !== String(VIP_GROUP_CHAT_ID)) {
+    if (msg.new_chat_members?.length || msg.left_chat_member) {
+      console.warn('⚠️ Ignoring group membership event from unexpected chat', {
+        chatId: msg.chat.id,
+        expectedVipGroupChatId: VIP_GROUP_CHAT_ID,
+      });
+    }
+    return;
+  }
 
   if (msg.new_chat_members?.length) {
     for (const member of msg.new_chat_members) {
@@ -764,6 +784,10 @@ bot.on('message', async (msg) => {
         user?.status === true && expiry && new Date() < expiry;
 
       if (!hasActiveSubscription) {
+        console.warn('⚠️ Removing non-active user from VIP group', {
+          telegramId: member.id,
+          foundUser: Boolean(user),
+        });
         await bot.banChatMember(VIP_GROUP_CHAT_ID, member.id).catch(console.error);
         await bot
           .unbanChatMember(VIP_GROUP_CHAT_ID, member.id)
@@ -777,17 +801,30 @@ bot.on('message', async (msg) => {
         left_group_at: '',
         is_in_vip_group: true,
       });
+
+      console.log('✅ Logged VIP group join in Firebase', {
+        telegramId: member.id,
+      });
     }
   }
 
   if (msg.left_chat_member) {
     const user = await getUserFromDB(String(msg.left_chat_member.id));
-    if (!user) return;
+    if (!user) {
+      console.warn('⚠️ VIP group leave event for unknown user', {
+        telegramId: msg.left_chat_member.id,
+      });
+      return;
+    }
 
     await updateUserInDB({
       ...user,
       is_in_vip_group: false,
       left_group_at: new Date().toISOString(),
+    });
+
+    console.log('✅ Logged VIP group leave in Firebase', {
+      telegramId: msg.left_chat_member.id,
     });
   }
 });
