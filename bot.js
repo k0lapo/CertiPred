@@ -22,7 +22,7 @@ const firebaseCollection =
 
 const VIP_GROUP_URL = 'https://t.me/+2AsqyFrMUgUwYjM0';
 const GHANA_PRICE = 5000 * 100; // GHS 5,000 (Paystack expects minor unit)
-const NIGERIA_PRICE =10 * 100; // ₦75,000 -> 75,000 * 100 (naira)
+const NIGERIA_PRICE =100 * 100; // ₦75,000 -> 75,000 * 100 (naira)
 const CURRENCY_MAP = { nigeria: 'NGN', ghana: 'GHS' };
 const SUBSCRIPTION_DAYS = 1;
 const REMINDER_DAYS_BEFORE_EXPIRY = 3;
