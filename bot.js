@@ -46,7 +46,7 @@ function parseFirebaseServiceAccount(value) {
 }
 
 admin.initializeApp({
-  credential: admin.credential.cert(
+  credential: admin.cert(
     parseFirebaseServiceAccount(firebaseServiceAccount)
   ),
 });
