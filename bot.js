@@ -127,10 +127,10 @@ app.post('/paystack/webhook', async (req, res) => {
       const userPayload = {
         ...(user || {}),
         telegram_id: telegramId || getTelegramId(user),
-        username,
-        first_name: firstName,
+        username: username || user?.username || '',
+        first_name: firstName || user?.first_name || '',
         last_name: user?.last_name || '',
-        email,
+        email: email || user?.email || '',
       };
 
       if (!getTelegramId(userPayload)) {
@@ -210,6 +210,8 @@ function toFirebaseUserPayload(user) {
     subscription_start: user.subscription_start || '',
     subscription_expires_at: user.subscription_expires_at || '',
     invited_to_vip_group_at: user.invited_to_vip_group_at || '',
+    vip_invite_link: user.vip_invite_link || '',
+    vip_invite_message_id: user.vip_invite_message_id || '',
     joined_group_at: user.joined_group_at || '',
     left_group_at: user.left_group_at || '',
     is_in_vip_group: user.is_in_vip_group === true,
@@ -320,21 +322,37 @@ async function activateSubscription(user, paymentReference) {
 async function sendVipInvite(chatId, message) {
   await bot.sendMessage(chatId, message).catch(console.error);
   const user = await getUserFromDB(String(chatId));
+  let inviteUrl = VIP_GROUP_URL;
+
+  try {
+    const invite = await bot.createChatInviteLink(VIP_GROUP_CHAT_ID, {
+      member_limit: 1,
+      name: `VIP-${chatId}-${Date.now()}`,
+    });
+    inviteUrl = invite.invite_link;
+  } catch (error) {
+    console.error('Error creating one-use VIP invite link:', error.message);
+  }
+
+  const inviteMessage = await bot
+    .sendMessage(chatId, '🚀 Click below to join the VIP group:', {
+      reply_markup: {
+        inline_keyboard: [[{ text: 'Join VIP Group', url: inviteUrl }]],
+      },
+    })
+    .catch(console.error);
+
   if (user) {
     await updateUserInDB({
       ...user,
       invited_to_vip_group_at:
         user.invited_to_vip_group_at || new Date().toISOString(),
+      vip_invite_link: inviteUrl,
+      vip_invite_message_id: inviteMessage?.message_id || '',
     }).catch(console.error);
   }
 
-  return bot
-    .sendMessage(chatId, '🚀 Click below to join the VIP group:', {
-      reply_markup: {
-        inline_keyboard: [[{ text: 'Join VIP Group', url: VIP_GROUP_URL }]],
-      },
-    })
-    .catch(console.error);
+  return inviteMessage;
 }
 
 async function manageSubscriptionExpirations() {
@@ -460,9 +478,9 @@ bot.on('callback_query', async (callbackQuery) => {
           currency,
           reference: paymentReference,
           metadata: {
-            telegram_id: message.chat.id,
-            first_name: message.from.first_name,
-            username: message.from.username,
+            telegram_id: callbackQuery.from.id,
+            first_name: callbackQuery.from.first_name,
+            username: callbackQuery.from.username,
           },
         },
         {
@@ -516,9 +534,9 @@ bot.on('callback_query', async (callbackQuery) => {
           currency,
           reference: paymentReference,
           metadata: {
-            telegram_id: message.chat.id,
-            first_name: message.from.first_name,
-            username: message.from.username,
+            telegram_id: callbackQuery.from.id,
+            first_name: callbackQuery.from.first_name,
+            username: callbackQuery.from.username,
           },
         },
         {
@@ -743,6 +761,8 @@ bot.onText(/\/start/, (msg) => {
         subscription_expires_at: null,
         payment_confirmed_at: null,
         invited_to_vip_group_at: null,
+        vip_invite_link: '',
+        vip_invite_message_id: '',
         joined_group_at: null,
         left_group_at: null,
         is_in_vip_group: false,
@@ -808,10 +828,16 @@ bot.on('message', async (msg) => {
 
       await updateUserInDB({
         ...user,
-        joined_group_at: user.joined_group_at || new Date().toISOString(),
+        joined_group_at: new Date().toISOString(),
         left_group_at: '',
         is_in_vip_group: true,
       });
+
+      if (user.vip_invite_message_id) {
+        await bot
+          .deleteMessage(String(member.id), user.vip_invite_message_id)
+          .catch(console.error);
+      }
 
       console.log('✅ Logged VIP group join in Firebase', {
         telegramId: member.id,
