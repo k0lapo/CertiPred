@@ -21,9 +21,8 @@ const firebaseCollection =
   process.env.FIREBASE_COLLECTION || 'certipredusers';
 
 const VIP_GROUP_URL = 'https://t.me/+2AsqyFrMUgUwYjM0';
-const GHANA_PRICE = 5000 * 100; // GHS 5,000 (Paystack expects minor unit)
 const NIGERIA_PRICE =100 * 100; // ₦75,000 -> 75,000 * 100 (naira)
-const CURRENCY_MAP = { nigeria: 'NGN', ghana: 'GHS' };
+const CURRENCY_MAP = { nigeria: 'NGN' };
 const SUBSCRIPTION_DAYS = 1;
 const REMINDER_DAYS_BEFORE_EXPIRY = 3;
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
@@ -322,7 +321,7 @@ async function activateSubscription(user, paymentReference) {
 async function sendVipInvite(chatId, message) {
   await bot.sendMessage(chatId, message).catch(console.error);
   const user = await getUserFromDB(String(chatId));
-  let inviteUrl = VIP_GROUP_URL;
+  let inviteUrl;
 
   try {
     const invite = await bot.createChatInviteLink(VIP_GROUP_CHAT_ID, {
@@ -332,6 +331,11 @@ async function sendVipInvite(chatId, message) {
     inviteUrl = invite.invite_link;
   } catch (error) {
     console.error('Error creating one-use VIP invite link:', error.message);
+    await bot.sendMessage(
+      chatId,
+      '✅ Payment confirmed, but I could not generate your VIP invite automatically. Please contact support.'
+    );
+    return;
   }
 
   const inviteMessage = await bot
@@ -459,63 +463,7 @@ bot.on('callback_query', async (callbackQuery) => {
       '❌ User not found. Please register first.'
     );
 
-  if (data === 'ghana') {
-    const amount = GHANA_PRICE;
-    const currency = CURRENCY_MAP.ghana;
-    const paymentReference = generatePaymentReference();
-
-    await updateUserInDB({
-      ...user,
-      payment_reference: paymentReference,
-    });
-
-    try {
-      const response = await axios.post(
-        'https://api.paystack.co/transaction/initialize',
-        {
-          email: user.email,
-          amount,
-          currency,
-          reference: paymentReference,
-          metadata: {
-            telegram_id: callbackQuery.from.id,
-            first_name: callbackQuery.from.first_name,
-            username: callbackQuery.from.username,
-          },
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${paystackSecretKey}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      const paymentUrl = response.data.data.authorization_url;
-      bot
-        .sendMessage(
-          message.chat.id,
-          `💳 The price is ${amount / 100} ${currency}. Click below to pay.\n\nAfter payment, check your email/Paystack receipt for your payment reference, then send:\n/verify ${paymentReference}`,
-          {
-            reply_markup: {
-              inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
-            },
-          }
-        )
-        .catch(console.error);
-    } catch (error) {
-      console.error(
-        'Payment initialization error (Ghana):',
-        error.response?.data || error.message
-      );
-      bot
-        .sendMessage(
-          message.chat.id,
-          '❌ Payment initialization failed. Please try again later.'
-        )
-        .catch(console.error);
-    }
-  } else if (data === 'nigeria' || data === 'renew_nigeria') {
+  if (data === 'nigeria' || data === 'renew_nigeria') {
     const amount = NIGERIA_PRICE;
     const currency = CURRENCY_MAP.nigeria;
     const paymentReference = generatePaymentReference();
@@ -873,7 +821,6 @@ bot.onText(/\/subscribe/, (msg) => {
       reply_markup: {
         inline_keyboard: [
           [{ text: 'Nigeria', callback_data: 'nigeria' }],
-          [{ text: 'Ghana', callback_data: 'ghana' }],
         ],
       },
     })
