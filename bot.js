@@ -209,6 +209,7 @@ function toFirebaseUserPayload(user) {
     payment_confirmed_at: user.payment_confirmed_at || '',
     subscription_start: user.subscription_start || '',
     subscription_expires_at: user.subscription_expires_at || '',
+    invited_to_vip_group_at: user.invited_to_vip_group_at || '',
     joined_group_at: user.joined_group_at || '',
     left_group_at: user.left_group_at || '',
     is_in_vip_group: user.is_in_vip_group === true,
@@ -318,6 +319,15 @@ async function activateSubscription(user, paymentReference) {
 
 async function sendVipInvite(chatId, message) {
   await bot.sendMessage(chatId, message).catch(console.error);
+  const user = await getUserFromDB(String(chatId));
+  if (user) {
+    await updateUserInDB({
+      ...user,
+      invited_to_vip_group_at:
+        user.invited_to_vip_group_at || new Date().toISOString(),
+    }).catch(console.error);
+  }
+
   return bot
     .sendMessage(chatId, '🚀 Click below to join the VIP group:', {
       reply_markup: {
@@ -351,7 +361,7 @@ async function manageSubscriptionExpirations() {
       bot
         .sendMessage(
           telegramId,
-          `⏳ Your VIP subscription expires in ${daysLeft} day(s). Please renew to keep access.`
+          `⏳ Your VIP subscription expires in ${daysLeft} day(s). Please /renew to keep access.`
         )
         .catch(console.error);
 
@@ -366,7 +376,7 @@ async function manageSubscriptionExpirations() {
         bot
           .sendMessage(
             telegramId,
-            `🚫 Your VIP subscription has expired. You have been removed from the VIP group. Renew anytime to join again.`
+            `🚫 Your VIP subscription has expired. You have been removed from the VIP group. Please /renew to regain access.`
           )
           .catch(console.error);
 
@@ -467,7 +477,7 @@ bot.on('callback_query', async (callbackQuery) => {
       bot
         .sendMessage(
           message.chat.id,
-          `💳 The price is ${amount / 100} ${currency}. Click below to pay:`,
+          `💳 The price is ${amount / 100} ${currency}. Click below to pay.\n\nAfter payment, check your email/Paystack receipt for your payment reference, then send:\n/verify ${paymentReference}`,
           {
             reply_markup: {
               inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
@@ -523,7 +533,7 @@ bot.on('callback_query', async (callbackQuery) => {
       bot
         .sendMessage(
           message.chat.id,
-          `💳 The price is ₦${amount / 100}. Click below to pay:`,
+          `💳 The price is ₦${amount / 100}. Click below to pay.\n\nAfter payment, check your email/Paystack receipt for your payment reference, then send:\n/verify ${paymentReference}`,
           {
             reply_markup: {
               inline_keyboard: [[{ text: 'Pay Now', url: paymentUrl }]],
@@ -732,6 +742,7 @@ bot.onText(/\/start/, (msg) => {
         subscription_start: null,
         subscription_expires_at: null,
         payment_confirmed_at: null,
+        invited_to_vip_group_at: null,
         joined_group_at: null,
         left_group_at: null,
         is_in_vip_group: false,
