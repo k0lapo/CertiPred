@@ -318,6 +318,11 @@ async function activateSubscription(user, paymentReference) {
   });
 }
 
+function deleteUserCommand(msg) {
+  if (!msg?.chat?.id || !msg?.message_id) return;
+  bot.deleteMessage(msg.chat.id, msg.message_id).catch(console.error);
+}
+
 async function sendVipInvite(chatId, message) {
   await bot.sendMessage(chatId, message).catch(console.error);
   const user = await getUserFromDB(String(chatId));
@@ -416,6 +421,7 @@ async function manageSubscriptionExpirations() {
 }
 
 bot.onText(/\/status/, async (msg) => {
+  deleteUserCommand(msg);
   const user = await getUserFromDB(String(msg.chat.id));
   if (!user || user.status !== true)
     return bot.sendMessage(msg.chat.id, '❌ Not an active VIP member.');
@@ -433,6 +439,7 @@ bot.onText(/\/status/, async (msg) => {
 });
 
 bot.onText(/\/renew/, async (msg) => {
+  deleteUserCommand(msg);
   const chatId = msg.chat.id;
   const user = await getUserFromDB(String(chatId));
   if (!user) return bot.sendMessage(chatId, '❌ Not registered. Use /start.');
@@ -453,6 +460,9 @@ bot.on('callback_query', async (callbackQuery) => {
   const message = callbackQuery.message;
   const data = callbackQuery.data;
   await bot.answerCallbackQuery(callbackQuery.id).catch(console.error);
+  await bot
+    .deleteMessage(message.chat.id, message.message_id)
+    .catch(console.error);
 
   console.log('Callback query received:', data);
 
@@ -533,6 +543,7 @@ function hexToTronBase58(hexAddress) {
 }
 
 bot.onText(/\/verify (.+)/, async (msg, match) => {
+  deleteUserCommand(msg);
   const chatId = msg.chat.id;
   const reference = match[1].trim();
 
@@ -571,9 +582,7 @@ bot.onText(/\/verify (.+)/, async (msg, match) => {
             "🎉 You are now activated! Here's your VIP join link:"
           )
           .catch(console.error);
-        bot
-          .sendMessage(chatId, VIP_GROUP_URL)
-          .catch(console.error);
+        await sendVipInvite(chatId, '✅ Payment confirmed! Welcome to VIP.');
       } else {
         bot
           .sendMessage(
@@ -610,6 +619,7 @@ function sendCryptoInstructions(chatId) {
 }
 
 bot.onText(/\/crypto/, (msg) => {
+  deleteUserCommand(msg);
   sendCryptoInstructions(msg.chat.id);
 });
 
@@ -657,16 +667,7 @@ bot.onText(/^[a-fA-F0-9]{64}$/, async (msg) => {
     ) {
       await activateSubscription(user, `USDT-${txid}`);
 
-      bot
-        .sendMessage(chatId, `✅ Payment confirmed! Welcome to VIP.`)
-        .catch(console.error);
-      bot
-        .sendMessage(chatId, `Click below to join:`, {
-          reply_markup: {
-            inline_keyboard: [[{ text: 'Join VIP Group', url: VIP_GROUP_URL }]],
-          },
-        })
-        .catch(console.error);
+      await sendVipInvite(chatId, `✅ Payment confirmed! Welcome to VIP.`);
     } else {
       return bot
         .sendMessage(chatId, '⚠️ Payment validation failed.')
@@ -681,6 +682,7 @@ bot.onText(/^[a-fA-F0-9]{64}$/, async (msg) => {
 });
 
 bot.onText(/\/start/, (msg) => {
+  deleteUserCommand(msg);
   const chatId = msg.chat.id;
   bot
     .sendPhoto(chatId, 'TC.png', {
@@ -815,6 +817,7 @@ bot.on('message', async (msg) => {
 });
 
 bot.onText(/\/subscribe/, (msg) => {
+  deleteUserCommand(msg);
   const chatId = msg.chat.id;
   bot
     .sendMessage(chatId, 'Where are you paying from?', {
